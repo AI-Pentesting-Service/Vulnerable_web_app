@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+
+{% block title %}Admin — CollabSpace{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="page-header">
+        <div>
+            <h1>Administration</h1>
+            <p class="subtitle text-muted">Manage users, tools, and system configuration</p>
+        </div>
+    </div>
+
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-number">{{ total_users }}</div>
+            <div class="stat-label">Total Users</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number">{{ total_projects }}</div>
+            <div class="stat-label">Projects</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number">{{ total_tasks }}</div>
+            <div class="stat-label">Tasks</div>
+        </div>
+    </div>
+
+    <div class="section">
+        <div class="section-header"><h2>Users</h2></div>
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Username</th>
+                        <th>Email</th>
+                        <th>Role</th>
+                        <th>Joined</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for u in recent_users %}
+                    <tr>
+                        <td class="text-muted">{{ u.id }}</td>
+                        <td><strong>{{ u.username }}</strong></td>
+                        <td>{{ u.email }}</td>
+                        <td><span class="badge {{ u.role }}">{{ u.role }}</span></td>
+                        <td class="text-muted">{{ u.created_at.strftime('%b %d, %Y') }}</td>
+                        <td>
+                            <button onclick="promoteUser({{ u.id }})" class="btn-secondary btn-small">Change Role</button>
+                            <button onclick="deleteUser({{ u.id }})" class="btn-danger btn-small">Delete</button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="section">
+        <div class="section-header"><h2>Admin Tools</h2></div>
+        <div class="admin-grid">
+
+            <div class="tool-card">
+                <h3>🌐 Fetch External URL</h3>
+                <p class="text-muted" style="font-size:0.8125rem;margin-bottom:0.75rem;">Retrieve content from any URL for diagnostics or webhook testing.</p>
+                <form onsubmit="fetchURL(event)">
+                    <input type="text" id="urlInput" placeholder="https://example.com" required>
+                    <button type="submit" class="btn-primary btn-small">Fetch</button>
+                </form>
+                <pre id="urlResult" class="result-box" style="display:none;"></pre>
+            </div>
+
+            <div class="tool-card">
+                <h3>🗄️ Execute Database Query</h3>
+                <p class="text-muted" style="font-size:0.8125rem;margin-bottom:0.75rem;">Run raw SQL for maintenance and reporting.</p>
+                <form onsubmit="executeQuery(event)">
+                    <textarea id="queryInput" placeholder="SELECT id, username, email FROM users LIMIT 10" rows="4" required></textarea>
+                    <button type="submit" class="btn-primary btn-small">Execute</button>
+                </form>
+                <pre id="queryResult" class="result-box" style="display:none;"></pre>
+            </div>
+
+        </div>
+    </div>
+</div>
+
+<script>
+async function promoteUser(userId) {
+    const newRole = prompt('Enter new role (admin / manager / member):');
+    if (!newRole) return;
+
+    try {
+        const response = await fetch(`/api/admin/users/${userId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ role: newRole })
+        });
+        if (response.ok) {
+            window.location.reload();
+        } else {
+            const err = await response.json();
+            alert(err.detail || 'Update failed');
+        }
+    } catch (err) { alert('Error: ' + err.message); }
+}
+
+async function deleteUser(userId) {
+    if (!confirm('Permanently delete this user and all their data?')) return;
+    try {
+        const response = await fetch(`/api/admin/users/${userId}`, { method: 'DELETE' });
+        if (response.ok) {
+            window.location.reload();
+        } else {
+            const err = await response.json();
+            alert(err.detail || 'Delete failed');
+        }
+    } catch (err) { alert('Error: ' + err.message); }
+}
+
+async function fetchURL(event) {
+    event.preventDefault();
+    const url = document.getElementById('urlInput').value;
+    const resultBox = document.getElementById('urlResult');
+    resultBox.style.display = 'block';
+    resultBox.textContent = 'Fetching…';
+
+    try {
+        const response = await fetch(`/api/admin/fetch-url?url=${encodeURIComponent(url)}`, {
+            method: 'POST'
+        });
+        const data = await response.json();
+        resultBox.textContent = JSON.stringify(data, null, 2);
+    } catch (err) {
+        resultBox.textContent = 'Error: ' + err.message;
+    }
+}
+
+async function executeQuery(event) {
+    event.preventDefault();
+    const query = document.getElementById('queryInput').value;
+    const resultBox = document.getElementById('queryResult');
+    resultBox.style.display = 'block';
+    resultBox.textContent = 'Executing…';
+
+    try {
+        const body = new URLSearchParams({ query });
+        const response = await fetch('/api/admin/execute-query', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: body.toString()
+        });
+        const data = await response.json();
+        resultBox.textContent = JSON.stringify(data, null, 2);
+    } catch (err) {
+        resultBox.textContent = 'Error: ' + err.message;
+    }
+}
+</script>
+{% endblock %}

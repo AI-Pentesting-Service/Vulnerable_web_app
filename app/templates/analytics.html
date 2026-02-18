@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block title %}Analytics - CollabSpace{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="page-header">
+        <h1>Analytics</h1>
+    </div>
+
+    <div class="stats-grid">
+        <div class="stat-card">
+            <h3 id="projectCount">-</h3>
+            <p>Total Projects</p>
+        </div>
+        <div class="stat-card">
+            <h3 id="taskCount">-</h3>
+            <p>Total Tasks</p>
+        </div>
+        <div class="stat-card">
+            <h3 id="completionRate">-</h3>
+            <p>Completion Rate</p>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Project Activity</h2>
+        <div class="chart-container">
+            <canvas id="activityChart"></canvas>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Recent Activity</h2>
+        <div class="activity-feed" id="activityFeed">
+            <p>Loading activity...</p>
+        </div>
+    </div>
+</div>
+
+<script>
+async function loadAnalytics() {
+    try {
+        const response = await fetch('/api/projects');
+        const projects = await response.json();
+
+        document.getElementById('projectCount').textContent = projects.length;
+
+        const tasksResponse = await fetch('/api/tasks');
+        const tasks = await tasksResponse.json();
+
+        document.getElementById('taskCount').textContent = tasks.length;
+
+        const completedTasks = tasks.filter(t => t.status === 'done').length;
+        const rate = tasks.length > 0 ? Math.round((completedTasks / tasks.length) * 100) : 0;
+        document.getElementById('completionRate').textContent = rate + '%';
+
+    } catch (error) {
+        console.error('Error loading analytics:', error);
+    }
+}
+
+loadAnalytics();
+</script>
+{% endblock %}

@@ -1,0 +1,382 @@
+{% extends "base.html" %}
+
+{% block title %}{{ project.name }} — CollabSpace{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="breadcrumb">
+        <a href="/projects">Projects</a>
+        <span class="breadcrumb-sep">/</span>
+        <span>{{ project.name }}</span>
+    </div>
+
+    <div class="page-header">
+        <div>
+            <h1>{{ project.name }}</h1>
+            <p class="subtitle text-muted">{{ project.description or 'No description provided.' }}</p>
+        </div>
+        <div class="header-actions">
+            <button onclick="showAddTask()" class="btn-primary btn-small">+ New Task</button>
+            <button onclick="showUploadFile()" class="btn-secondary btn-small">Upload File</button>
+        </div>
+    </div>
+
+    <div class="project-details">
+        <div class="detail-item">
+            <strong>Project ID</strong>
+            {{ project.id }}
+        </div>
+        <div class="detail-item">
+            <strong>Owner</strong>
+            User #{{ project.owner_id }}
+        </div>
+        <div class="detail-item">
+            <strong>Visibility</strong>
+            {{ 'Private' if project.is_private else 'Public' }}
+        </div>
+        <div class="detail-item">
+            <strong>Created</strong>
+            {{ project.created_at.strftime('%b %d, %Y') }}
+        </div>
+    </div>
+
+    <!-- Tasks Section -->
+    <div class="section">
+        <div class="section-header">
+            <h2>Tasks ({{ tasks|length }})</h2>
+        </div>
+        {% if tasks %}
+        <div class="tasks-list">
+            {% for task in tasks %}
+            <div class="task-item" id="task-{{ task.id }}">
+                <div class="task-info" style="flex:1">
+                    <h3>{{ task.title }}</h3>
+                    <p>{{ task.description or 'No description.' }}</p>
+                    <div class="task-meta">
+                        <span class="badge status-{{ task.status }}">{{ task.status|replace('_', ' ')|title }}</span>
+                        <span class="badge priority-{{ task.priority }}">{{ task.priority|title }}</span>
+                        <span class="text-muted">Task #{{ task.id }}</span>
+                    </div>
+                    <!-- Comments section per task -->
+                    <div class="comments-section" id="comments-{{ task.id }}" style="display:none;">
+                        <div class="comment-list" id="comment-list-{{ task.id }}"></div>
+                        <div class="comment-input-row">
+                            <textarea id="comment-input-{{ task.id }}" placeholder="Add a comment…" rows="2"></textarea>
+                            <button onclick="postComment({{ task.id }})" class="btn-primary btn-small">Post</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="task-actions">
+                    <button onclick="toggleComments({{ task.id }})" class="btn-ghost btn-small">💬</button>
+                    <button onclick="showEditTask({{ task.id }}, {{ task.title|tojson }}, {{ task.status|tojson }}, {{ task.priority|tojson }})" class="btn-secondary btn-small">Edit</button>
+                    <button onclick="deleteTask({{ task.id }})" class="btn-danger btn-small">Delete</button>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <div class="empty-state-icon">✅</div>
+            <p>No tasks yet. Add the first task for this project.</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Files Section -->
+    <div class="section">
+        <div class="section-header">
+            <h2>Files ({{ files|length }})</h2>
+        </div>
+        {% if files %}
+        <div class="files-list">
+            {% for file in files %}
+            <div class="file-item">
+                <div class="file-info">
+                    <div class="file-icon">{{ file.original_filename.split('.')[-1]|upper if '.' in file.original_filename else 'FILE' }}</div>
+                    <div>
+                        <div class="file-name">{{ file.original_filename }}</div>
+                        <div class="file-size">{{ (file.file_size / 1024)|round(1) }} KB · ID: {{ file.id }}</div>
+                    </div>
+                </div>
+                <div class="file-actions">
+                    <button onclick="downloadFile({{ file.id }})" class="btn-secondary btn-small">Download</button>
+                    <button onclick="processFile({{ file.id }})" class="btn-ghost btn-small">Process</button>
+                    <button onclick="deleteFile({{ file.id }})" class="btn-danger btn-small">Delete</button>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <div class="empty-state-icon">📎</div>
+            <p>No files uploaded yet.</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Add Task Modal -->
+<div id="addTaskModal" class="modal">
+    <div class="modal-content">
+        <span class="close" onclick="closeModals()">&times;</span>
+        <h2>New Task</h2>
+        <form onsubmit="createTask(event)">
+            <input type="hidden" name="project_id" value="{{ project.id }}">
+            <div class="form-group">
+                <label for="taskTitle">Title</label>
+                <input type="text" id="taskTitle" name="title" required placeholder="Task title">
+            </div>
+            <div class="form-group">
+                <label for="taskDescription">Description</label>
+                <textarea id="taskDescription" name="description" rows="3" placeholder="Optional details"></textarea>
+            </div>
+            <div class="form-group">
+                <label for="taskStatus">Status</label>
+                <select id="taskStatus" name="status">
+                    <option value="todo">To Do</option>
+                    <option value="in_progress">In Progress</option>
+                    <option value="done">Done</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="taskPriority">Priority</label>
+                <select id="taskPriority" name="priority">
+                    <option value="low">Low</option>
+                    <option value="medium" selected>Medium</option>
+                    <option value="high">High</option>
+                </select>
+            </div>
+            <div class="modal-actions">
+                <button type="button" onclick="closeModals()" class="btn-secondary">Cancel</button>
+                <button type="submit" class="btn-primary">Create Task</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Edit Task Modal -->
+<div id="editTaskModal" class="modal">
+    <div class="modal-content">
+        <span class="close" onclick="closeModals()">&times;</span>
+        <h2>Edit Task</h2>
+        <form onsubmit="saveEditTask(event)">
+            <input type="hidden" id="editTaskId">
+            <div class="form-group">
+                <label for="editTaskTitle">Title</label>
+                <input type="text" id="editTaskTitle" required>
+            </div>
+            <div class="form-group">
+                <label for="editTaskStatus">Status</label>
+                <select id="editTaskStatus">
+                    <option value="todo">To Do</option>
+                    <option value="in_progress">In Progress</option>
+                    <option value="done">Done</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="editTaskPriority">Priority</label>
+                <select id="editTaskPriority">
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                </select>
+            </div>
+            <div class="modal-actions">
+                <button type="button" onclick="closeModals()" class="btn-secondary">Cancel</button>
+                <button type="submit" class="btn-primary">Save</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Upload File Modal -->
+<div id="uploadFileModal" class="modal">
+    <div class="modal-content">
+        <span class="close" onclick="closeModals()">&times;</span>
+        <h2>Upload File</h2>
+        <form onsubmit="uploadFile(event)">
+            <div class="form-group">
+                <label for="fileInput">Select file</label>
+                <input type="file" id="fileInput" name="file" required>
+            </div>
+            <div class="modal-actions">
+                <button type="button" onclick="closeModals()" class="btn-secondary">Cancel</button>
+                <button type="submit" class="btn-primary">Upload</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+const PROJECT_ID = {{ project.id }};
+
+function showAddTask()    { document.getElementById('addTaskModal').style.display    = 'block'; }
+function showUploadFile() { document.getElementById('uploadFileModal').style.display = 'block'; }
+function closeModals() {
+    document.getElementById('addTaskModal').style.display    = 'none';
+    document.getElementById('editTaskModal').style.display   = 'none';
+    document.getElementById('uploadFileModal').style.display = 'none';
+}
+
+function showEditTask(taskId, title, status, priority) {
+    document.getElementById('editTaskId').value        = taskId;
+    document.getElementById('editTaskTitle').value     = title;
+    document.getElementById('editTaskStatus').value    = status;
+    document.getElementById('editTaskPriority').value  = priority;
+    document.getElementById('editTaskModal').style.display = 'block';
+}
+
+async function createTask(event) {
+    event.preventDefault();
+    const formData = new FormData(event.target);
+    const data = {
+        title:       formData.get('title'),
+        description: formData.get('description'),
+        status:      formData.get('status'),
+        priority:    formData.get('priority'),
+        project_id:  parseInt(formData.get('project_id'))
+    };
+    try {
+        const response = await fetch('/api/tasks', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        if (response.ok) { window.location.reload(); }
+        else {
+            const err = await response.json();
+            alert(err.detail || 'Failed to create task');
+        }
+    } catch (err) { alert('Error: ' + err.message); }
+}
+
+async function saveEditTask(event) {
+    event.preventDefault();
+    const taskId   = document.getElementById('editTaskId').value;
+    const title    = document.getElementById('editTaskTitle').value;
+    const status   = document.getElementById('editTaskStatus').value;
+    const priority = document.getElementById('editTaskPriority').value;
+
+    try {
+        // Fixed: sends TaskUpdate-compatible body (all optional fields)
+        const response = await fetch(`/api/tasks/${taskId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title, status, priority })
+        });
+        if (response.ok) { window.location.reload(); }
+        else {
+            const err = await response.json();
+            alert(err.detail || 'Failed to update task');
+        }
+    } catch (err) { alert('Error: ' + err.message); }
+}
+
+async function deleteTask(taskId) {
+    if (!confirm('Delete this task?')) return;
+    try {
+        const r = await fetch(`/api/tasks/${taskId}`, { method: 'DELETE' });
+        if (r.ok) window.location.reload();
+    } catch (err) { alert('Error: ' + err.message); }
+}
+
+async function uploadFile(event) {
+    event.preventDefault();
+    const formData = new FormData();
+    formData.append('file', document.getElementById('fileInput').files[0]);
+    try {
+        const response = await fetch(`/api/files/upload?project_id=${PROJECT_ID}`, {
+            method: 'POST',
+            body: formData
+        });
+        if (response.ok) { window.location.reload(); }
+        else {
+            const err = await response.json();
+            alert(err.detail || 'Upload failed');
+        }
+    } catch (err) { alert('Error: ' + err.message); }
+}
+
+function downloadFile(fileId) {
+    window.open(`/api/files/${fileId}/download`, '_blank');
+}
+
+async function deleteFile(fileId) {
+    if (!confirm('Delete this file?')) return;
+    try {
+        const r = await fetch(`/api/files/${fileId}`, { method: 'DELETE' });
+        if (r.ok) window.location.reload();
+    } catch (err) { alert('Error: ' + err.message); }
+}
+
+async function processFile(fileId) {
+    try {
+        const r = await fetch(`/api/files/process?file_id=${fileId}`, { method: 'POST' });
+        const data = await r.json();
+        alert(JSON.stringify(data, null, 2));
+    } catch (err) { alert('Error: ' + err.message); }
+}
+
+// ── Comments ──────────────────────────────────────────────────────────────
+async function toggleComments(taskId) {
+    const section = document.getElementById(`comments-${taskId}`);
+    if (section.style.display === 'none') {
+        section.style.display = 'block';
+        await loadComments(taskId);
+    } else {
+        section.style.display = 'none';
+    }
+}
+
+async function loadComments(taskId) {
+    try {
+        const r = await fetch(`/api/comments?task_id=${taskId}`);
+        const comments = await r.json();
+        const list = document.getElementById(`comment-list-${taskId}`);
+
+        if (comments.length === 0) {
+            list.innerHTML = '<p class="text-muted" style="font-size:0.8125rem;padding:0.5rem 0">No comments yet.</p>';
+            return;
+        }
+
+        let html = '';
+        for (const c of comments) {
+            html += `<div class="comment-item">
+                        <div class="comment-author">${escapeHTML(c.author_username)}</div>
+                        <div class="comment-content">${c.content}</div>
+                     </div>`;
+        }
+        list.innerHTML = html;
+    } catch (err) {
+        console.error('Failed to load comments:', err);
+    }
+}
+
+function escapeHTML(str) {
+    const d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
+}
+
+async function postComment(taskId) {
+    const input = document.getElementById(`comment-input-${taskId}`);
+    const content = input.value.trim();
+    if (!content) return;
+
+    try {
+        const r = await fetch('/api/comments', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content, task_id: taskId })
+        });
+        if (r.ok) {
+            input.value = '';
+            await loadComments(taskId);
+        } else {
+            const err = await r.json();
+            alert(err.detail || 'Failed to post comment');
+        }
+    } catch (err) { alert('Error: ' + err.message); }
+}
+</script>
+{% endblock %}

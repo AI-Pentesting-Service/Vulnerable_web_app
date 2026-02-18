@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+
+{% block title %}Create Account — CollabSpace{% endblock %}
+
+{% block content %}
+<div class="auth-container">
+    <div class="auth-card">
+        <div class="auth-logo">
+            <div class="auth-logo-icon">C</div>
+            <span class="auth-logo-text">CollabSpace</span>
+        </div>
+
+        <h1>Create your account</h1>
+        <p class="subtitle">Start collaborating with your team</p>
+
+        <form id="registerForm" onsubmit="handleRegister(event)">
+            <div class="form-group">
+                <label for="username">Username</label>
+                <input type="text" id="username" name="username" autocomplete="username" required placeholder="your_username">
+            </div>
+            <div class="form-group">
+                <label for="email">Work email</label>
+                <input type="email" id="email" name="email" autocomplete="email" required placeholder="you@company.com">
+            </div>
+            <div class="form-group">
+                <label for="full_name">Full name</label>
+                <input type="text" id="full_name" name="full_name" autocomplete="name" placeholder="Jane Smith">
+            </div>
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" name="password" autocomplete="new-password" required placeholder="Min. 8 chars, mixed case + number + symbol">
+            </div>
+            <button type="submit" class="btn-primary btn-block">Create account</button>
+        </form>
+
+        <div class="auth-footer">
+            <span>Already have an account?</span>
+            <a href="/login">Sign in</a>
+        </div>
+    </div>
+</div>
+
+<script>
+async function handleRegister(event) {
+    event.preventDefault();
+    const formData = new FormData(event.target);
+    const data = Object.fromEntries(formData);
+    const btn = event.target.querySelector('button[type=submit]');
+    btn.disabled = true;
+    btn.textContent = 'Creating account…';
+
+    try {
+        const response = await fetch('/api/auth/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        const result = await response.json();
+
+        if (response.ok) {
+            alert('Account created! You can now sign in.');
+            window.location.href = '/login';
+        } else {
+            const detail = result.detail;
+            const msg = Array.isArray(detail) ? detail.map(e => e.msg).join(', ') : (detail || 'Registration failed');
+            alert(msg);
+            btn.disabled = false;
+            btn.textContent = 'Create account';
+        }
+    } catch (err) {
+        alert('Error: ' + err.message);
+        btn.disabled = false;
+        btn.textContent = 'Create account';
+    }
+}
+</script>
+{% endblock %}

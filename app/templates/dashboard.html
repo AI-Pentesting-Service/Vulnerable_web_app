@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard — CollabSpace{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="page-header">
+        <div>
+            <h1>Dashboard</h1>
+            <p class="subtitle text-muted">Welcome back, {{ user.full_name or user.username }}</p>
+        </div>
+        <div class="header-actions">
+            <button onclick="showCreateProject()" class="btn-primary btn-small">+ New Project</button>
+        </div>
+    </div>
+
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-number">{{ projects|length }}</div>
+            <div class="stat-label">Active Projects</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number">0</div>
+            <div class="stat-label">Open Tasks</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number">{{ user.role|title }}</div>
+            <div class="stat-label">Role</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number">#{{ user.id }}</div>
+            <div class="stat-label">User ID</div>
+        </div>
+    </div>
+
+    <div class="section">
+        <div class="section-header">
+            <h2>Recent Projects</h2>
+            <a href="/projects" class="btn-ghost btn-small">View all</a>
+        </div>
+        {% if projects %}
+        <div class="projects-grid">
+            {% for project in projects[:6] %}
+            <div class="project-card" onclick="window.location.href='/projects/{{ project.id }}'">
+                <h3>{{ project.name }}</h3>
+                <p>{{ project.description or 'No description provided.' }}</p>
+                <div class="project-meta">
+                    <span class="badge {{ 'private' if project.is_private else 'public' }}">{{ 'Private' if project.is_private else 'Public' }}</span>
+                    <span class="text-muted">#{{ project.id }}</span>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <div class="empty-state-icon">📂</div>
+            <p>No projects yet. Create your first project to get started.</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Create Project Modal -->
+<div id="createProjectModal" class="modal">
+    <div class="modal-content">
+        <span class="close" onclick="closeModal()">&times;</span>
+        <h2>New Project</h2>
+        <form onsubmit="createProject(event)">
+            <div class="form-group">
+                <label for="projectName">Project name</label>
+                <input type="text" id="projectName" name="name" required placeholder="e.g. Website Redesign">
+            </div>
+            <div class="form-group">
+                <label for="projectDescription">Description</label>
+                <textarea id="projectDescription" name="description" rows="3" placeholder="Optional description"></textarea>
+            </div>
+            <div class="form-group">
+                <label class="form-check">
+                    <input type="checkbox" id="isPrivate" name="is_private">
+                    Make this project private
+                </label>
+            </div>
+            <div class="modal-actions">
+                <button type="button" onclick="closeModal()" class="btn-secondary">Cancel</button>
+                <button type="submit" class="btn-primary">Create project</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function showCreateProject() {
+    document.getElementById('createProjectModal').style.display = 'block';
+}
+
+function closeModal() {
+    document.getElementById('createProjectModal').style.display = 'none';
+}
+
+async function createProject(event) {
+    event.preventDefault();
+    const formData = new FormData(event.target);
+    const data = {
+        name: formData.get('name'),
+        description: formData.get('description'),
+        is_private: formData.get('is_private') === 'on'
+    };
+    try {
+        const response = await fetch('/api/projects', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        if (response.ok) {
+            window.location.reload();
+        } else {
+            const error = await response.json();
+            const msg = Array.isArray(error.detail) ? error.detail.map(e=>e.msg).join(', ') : (error.detail || 'Failed');
+            alert(msg);
+        }
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+}
+</script>
+{% endblock %}

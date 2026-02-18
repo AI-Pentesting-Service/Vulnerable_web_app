@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}CollabSpace{% endblock %}</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    {% if user %}
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-brand">
+                <a href="/dashboard">CollabSpace</a>
+            </div>
+            <div class="nav-menu">
+                <a href="/dashboard">Dashboard</a>
+                <a href="/projects">Projects</a>
+                <a href="/tasks">My Tasks</a>
+                <a href="/analytics">Analytics</a>
+                {% if user.role == 'admin' %}
+                <a href="/admin">Admin</a>
+                {% endif %}
+            </div>
+            <div class="nav-user">
+                <a href="/profile" style="color:#c6c6c6;text-decoration:none;font-size:0.875rem;">
+                    {% if user.avatar %}
+                    <img src="{{ user.avatar }}" alt="" style="width:24px;height:24px;border-radius:50%;vertical-align:middle;margin-right:0.375rem;object-fit:cover;">
+                    {% else %}
+                    <span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:#0f62fe;color:#fff;font-size:0.75rem;font-weight:700;vertical-align:middle;margin-right:0.375rem;">{{ user.username[0]|upper }}</span>
+                    {% endif %}
+                    {{ user.username }}
+                </a>
+                <span class="role-badge {{ user.role }}">{{ user.role }}</span>
+                <button onclick="logout()" class="btn-secondary btn-small">Sign out</button>
+            </div>
+        </div>
+    </nav>
+    {% endif %}
+
+    <main class="main-content">
+        {% block content %}{% endblock %}
+    </main>
+
+    <script src="/static/js/app.js"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

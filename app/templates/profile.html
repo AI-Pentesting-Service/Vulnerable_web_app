@@ -1,0 +1,221 @@
+{% extends "base.html" %}
+
+{% block title %}Profile — CollabSpace{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="page-header">
+        <div>
+            <h1>Your Profile</h1>
+            <p class="subtitle text-muted">Manage your account settings and preferences</p>
+        </div>
+    </div>
+
+    <div class="profile-grid">
+        <!-- Sidebar -->
+        <div class="profile-sidebar">
+            {% if user.avatar %}
+            <img src="{{ user.avatar }}" alt="Avatar" class="avatar-img">
+            {% else %}
+            <div class="avatar-placeholder">{{ user.username[0]|upper }}</div>
+            {% endif %}
+
+            <div class="profile-name">{{ user.full_name or user.username }}</div>
+            <div class="profile-username">@{{ user.username }}</div>
+            <span class="badge {{ user.role }}">{{ user.role|title }}</span>
+
+            <hr class="divider">
+
+            <div style="text-align:left;font-size:0.8125rem;color:var(--text-secondary);">
+                <div style="margin-bottom:0.5rem;"><strong style="color:var(--text)">Email</strong><br>{{ user.email }}</div>
+                <div style="margin-bottom:0.5rem;"><strong style="color:var(--text)">User ID</strong><br>#{{ user.id }}</div>
+                <div><strong style="color:var(--text)">Member since</strong><br>{{ user.created_at.strftime('%b %d, %Y') }}</div>
+            </div>
+
+            <hr class="divider">
+
+            <form id="avatarForm" onsubmit="uploadAvatar(event)">
+                <div class="form-group" style="text-align:left;">
+                    <label style="font-size:0.8125rem;">Profile photo</label>
+                    <input type="file" name="file" id="avatarFile" accept="image/*" style="font-size:0.8125rem;">
+                </div>
+                <button type="submit" class="btn-secondary btn-small" style="width:100%;justify-content:center;">Upload photo</button>
+            </form>
+        </div>
+
+        <!-- Main content -->
+        <div class="profile-main">
+
+            <!-- Edit Profile -->
+            <div class="card">
+                <h3>Edit Profile</h3>
+                <form onsubmit="updateProfile(event)">
+                    <div class="form-group">
+                        <label for="fullName">Full name</label>
+                        <input type="text" id="fullName" name="full_name" value="{{ user.full_name or '' }}" placeholder="Your full name">
+                    </div>
+                    <div class="form-group">
+                        <label for="bio">Bio</label>
+                        <textarea id="bio" name="bio" rows="3" placeholder="Tell your team about yourself…">{{ user.bio or '' }}</textarea>
+                    </div>
+                    <button type="submit" class="btn-primary btn-small">Save changes</button>
+                </form>
+                <div id="bioDisplay" style="margin-top:1rem;"></div>
+            </div>
+
+            <!-- Webhook Tester -->
+            <div class="card">
+                <h3>Webhook Integration</h3>
+                <p class="text-muted" style="font-size:0.8125rem;margin-bottom:1rem;">Test your webhook endpoint. CollabSpace will POST an event payload to the URL you provide.</p>
+                <form onsubmit="testWebhook(event)">
+                    <div class="form-group">
+                        <label for="webhookUrl">Webhook URL</label>
+                        <input type="text" id="webhookUrl" placeholder="https://your-service.com/webhook" required>
+                    </div>
+                    <button type="submit" class="btn-secondary btn-small">Send test event</button>
+                </form>
+                <pre id="webhookResult" class="result-box" style="display:none;"></pre>
+            </div>
+
+            <!-- API Key -->
+            <div class="card">
+                <h3>API Key</h3>
+                <p class="text-muted" style="font-size:0.8125rem;margin-bottom:1rem;">Use your API key to authenticate programmatic requests.</p>
+                {% if user.api_key %}
+                <div class="api-key-box" id="apiKeyBox">{{ user.api_key }}</div>
+                {% else %}
+                <div class="api-key-box" id="apiKeyBox" style="color:#a8a8a8;font-style:italic;">No API key generated</div>
+                {% endif %}
+                <div style="display:flex;gap:0.5rem;margin-top:0.75rem;">
+                    <button onclick="generateApiKey()" class="btn-primary btn-small">Generate new key</button>
+                    <button onclick="revokeApiKey()" class="btn-secondary btn-small">Revoke key</button>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>User Directory</h3>
+                <p class="text-muted" style="font-size:0.8125rem;margin-bottom:1rem;">Look up a team member by their user ID.</p>
+                <div style="display:flex;gap:0.5rem;align-items:flex-end;">
+                    <div class="form-group" style="margin:0;flex:1;">
+                        <label for="lookupUserId">User ID</label>
+                        <input type="number" id="lookupUserId" placeholder="e.g. 1" min="1">
+                    </div>
+                    <button onclick="lookupUser()" class="btn-secondary btn-small" style="margin-bottom:1.25rem;">Look up</button>
+                </div>
+                <pre id="lookupResult" class="result-box" style="display:none;"></pre>
+            </div>
+
+        </div>
+    </div>
+</div>
+
+<script>
+async function uploadAvatar(event) {
+    event.preventDefault();
+    const fileInput = document.getElementById('avatarFile');
+    if (!fileInput.files[0]) { alert('Please select a file.'); return; }
+
+    const formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+
+    try {
+        const r = await fetch('/api/profile/avatar', { method: 'POST', body: formData });
+        const data = await r.json();
+        if (r.ok) {
+            alert('Avatar updated!');
+            window.location.reload();
+        } else {
+            alert(data.detail || 'Upload failed');
+        }
+    } catch (err) { alert('Error: ' + err.message); }
+}
+
+async function updateProfile(event) {
+    event.preventDefault();
+    const full_name = document.getElementById('fullName').value;
+    const bio       = document.getElementById('bio').value;
+
+    try {
+        const r = await fetch('/api/profile/update', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ full_name, bio })
+        });
+        const data = await r.json();
+        if (r.ok) {
+            document.getElementById('bioDisplay').innerHTML = data.bio ? `<p class="text-muted" style="font-size:0.8125rem;">Bio preview: ${data.bio}</p>` : '';
+            alert('Profile saved!');
+        } else {
+            alert(data.detail || 'Update failed');
+        }
+    } catch (err) { alert('Error: ' + err.message); }
+}
+
+async function testWebhook(event) {
+    event.preventDefault();
+    const url = document.getElementById('webhookUrl').value;
+    const resultBox = document.getElementById('webhookResult');
+    resultBox.style.display = 'block';
+    resultBox.textContent = 'Sending…';
+
+    try {
+        const r = await fetch('/api/profile/webhook/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url })
+        });
+        const data = await r.json();
+        resultBox.textContent = JSON.stringify(data, null, 2);
+    } catch (err) {
+        resultBox.textContent = 'Error: ' + err.message;
+    }
+}
+
+async function generateApiKey() {
+    try {
+        const r = await fetch('/api/profile/generate-api-key', { method: 'POST' });
+        const data = await r.json();
+        if (r.ok) {
+            document.getElementById('apiKeyBox').textContent = data.api_key;
+        } else {
+            alert(data.detail || 'Failed');
+        }
+    } catch (err) { alert('Error: ' + err.message); }
+}
+
+async function revokeApiKey() {
+    if (!confirm('Revoke your API key? Any integrations using it will stop working.')) return;
+    try {
+        const r = await fetch('/api/profile/revoke-api-key', { method: 'POST' });
+        const data = await r.json();
+        if (r.ok) {
+            document.getElementById('apiKeyBox').textContent = 'No API key generated';
+            document.getElementById('apiKeyBox').style.fontStyle = 'italic';
+            document.getElementById('apiKeyBox').style.color = '#a8a8a8';
+        }
+    } catch (err) { alert('Error: ' + err.message); }
+}
+
+async function lookupUser() {
+    const userId = document.getElementById('lookupUserId').value;
+    if (!userId) return;
+    const resultBox = document.getElementById('lookupResult');
+    resultBox.style.display = 'block';
+    resultBox.textContent = 'Loading…';
+
+    try {
+        const r = await fetch(`/api/users/${userId}`);
+        const data = await r.json();
+        resultBox.textContent = JSON.stringify(data, null, 2);
+    } catch (err) {
+        resultBox.textContent = 'Error: ' + err.message;
+    }
+}
+
+// Render bio on page load if already saved
+const currentBio = {{ user.bio | tojson if user.bio else 'null' }};
+if (currentBio) {
+    document.getElementById('bioDisplay').innerHTML = `<p class="text-muted" style="font-size:0.8125rem;">Bio preview: ${currentBio}</p>`;
+}
+</script>
+{% endblock %}

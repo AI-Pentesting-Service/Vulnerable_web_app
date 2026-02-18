@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: collabspace_db
+    environment:
+      POSTGRES_USER: collabspace
+      POSTGRES_PASSWORD: collabspace123
+      POSTGRES_DB: collabspace
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U collabspace"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build: .
+    container_name: collabspace_web
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./uploads:/app/uploads
+      - ./app:/app/app
+    environment:
+      DATABASE_URL: postgresql://collabspace:collabspace123@db:5432/collabspace
+      SECRET_KEY: dev-secret-key-2023-collabspace-jwt-token
+      DEBUG: "true"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

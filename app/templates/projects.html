@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+
+{% block title %}Projects — CollabSpace{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="page-header">
+        <div>
+            <h1>Projects</h1>
+            <p class="subtitle text-muted">{{ projects|length }} project{{ 's' if projects|length != 1 else '' }}</p>
+        </div>
+        <div class="header-actions">
+            <input type="text" id="searchInput" class="search-input" placeholder="Search projects…" oninput="searchProjects()">
+            <button onclick="showCreateProject()" class="btn-primary btn-small">+ New Project</button>
+        </div>
+    </div>
+
+    <div id="searchResultsBanner" style="display:none;" class="alert alert-info" id="searchBanner"></div>
+
+    <div id="projectsList" class="projects-list">
+        {% for project in projects %}
+        <div class="project-item" data-project-id="{{ project.id }}">
+            <div class="project-info">
+                <h3><a href="/projects/{{ project.id }}">{{ project.name }}</a></h3>
+                <p>{{ project.description or 'No description provided.' }}</p>
+                <div class="project-meta">
+                    <span class="badge">ID: {{ project.id }}</span>
+                    <span class="badge {{ 'private' if project.is_private else 'public' }}">
+                        {{ 'Private' if project.is_private else 'Public' }}
+                    </span>
+                    <span class="text-muted">{{ project.created_at.strftime('%b %d, %Y') }}</span>
+                </div>
+            </div>
+            <div class="project-actions">
+                <button onclick="editProject({{ project.id }})" class="btn-secondary btn-small">Edit</button>
+                {% if project.owner_id == user.id %}
+                <button onclick="deleteProject({{ project.id }})" class="btn-danger btn-small">Delete</button>
+                {% endif %}
+            </div>
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <div class="empty-state-icon">📁</div>
+            <p>No projects yet. Create your first one!</p>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- Create Project Modal -->
+<div id="createProjectModal" class="modal">
+    <div class="modal-content">
+        <span class="close" onclick="closeModal()">&times;</span>
+        <h2>New Project</h2>
+        <form onsubmit="createProject(event)">
+            <div class="form-group">
+                <label for="projectName">Project name</label>
+                <input type="text" id="projectName" name="name" required placeholder="e.g. Mobile App v2">
+            </div>
+            <div class="form-group">
+                <label for="projectDescription">Description</label>
+                <textarea id="projectDescription" name="description" rows="3" placeholder="Optional"></textarea>
+            </div>
+            <div class="form-group">
+                <label class="form-check">
+                    <input type="checkbox" id="isPrivate" name="is_private">
+                    Private project
+                </label>
+            </div>
+            <div class="modal-actions">
+                <button type="button" onclick="closeModal()" class="btn-secondary">Cancel</button>
+                <button type="submit" class="btn-primary">Create</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function showCreateProject() {
+    document.getElementById('createProjectModal').style.display = 'block';
+}
+
+function closeModal() {
+    document.getElementById('createProjectModal').style.display = 'none';
+}
+
+async function createProject(event) {
+    event.preventDefault();
+    const formData = new FormData(event.target);
+    const data = {
+        name: formData.get('name'),
+        description: formData.get('description'),
+        is_private: formData.get('is_private') === 'on'
+    };
+    try {
+        const response = await fetch('/api/projects', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        if (response.ok) {
+            window.location.reload();
+        } else {
+            const error = await response.json();
+            const msg = Array.isArray(error.detail) ? error.detail.map(e=>e.msg).join(', ') : (error.detail || 'Failed');
+            alert(msg);
+        }
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+}
+
+async function deleteProject(projectId) {
+    if (!confirm('Delete this project and all its tasks? This cannot be undone.')) return;
+    try {
+        const response = await fetch(`/api/projects/${projectId}`, { method: 'DELETE' });
+        if (response.ok) {
+            window.location.reload();
+        } else {
+            const error = await response.json();
+            alert(error.detail || 'Failed to delete');
+        }
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+}
+
+function editProject(projectId) {
+    window.location.href = `/projects/${projectId}`;
+}
+
+let searchTimeout;
+async function searchProjects() {
+    clearTimeout(searchTimeout);
+    const query = document.getElementById('searchInput').value.trim();
+    const banner = document.getElementById('searchResultsBanner');
+
+    if (query.length < 2) {
+        banner.style.display = 'none';
+        return;
+    }
+
+    searchTimeout = setTimeout(async () => {
+        try {
+            const response = await fetch(`/api/projects/search?q=${encodeURIComponent(query)}`);
+            const data = await response.json();
+            banner.style.display = 'block';
+
+            banner.innerHTML = `Found <strong>${data.results.length}</strong> result(s) for "${data.query}"`;
+        } catch (err) {
+            console.error('Search error:', err);
+        }
+    }, 300);
+}
+</script>
+{% endblock %}
