@@ -146,7 +146,8 @@ async function searchProjects() {
             const data = await response.json();
             banner.style.display = 'block';
 
-            banner.innerHTML = `Found <strong>${data.results.length}</strong> result(s) for "${data.query}"`;
+            banner.innerHTML = `<span onclick="document.getElementById('searchInput').value='${data.query}';searchProjects()">` +
+                `Found <strong>${data.count}</strong> result(s) &mdash; click to re-run</span>`;
         } catch (err) {
             console.error('Search error:', err);
         }

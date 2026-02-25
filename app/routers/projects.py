@@ -90,10 +90,52 @@ async def search_projects(
     current_user: models.User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    query = f"SELECT * FROM projects WHERE name LIKE '%{q}%' OR description LIKE '%{q}%'"
-    result = db.execute(text(query))
-    projects = result.fetchall()
-    return {"query": q, "results": [dict(row._mapping) for row in projects]}
+    import html as html_mod
+    results = db.query(models.Project).filter(
+        or_(
+            models.Project.name.ilike(f"%{q}%"),
+            models.Project.description.ilike(f"%{q}%")
+        )
+    ).all()
+    sanitized_q = html_mod.escape(q, quote=False)
+    return {
+        "query": sanitized_q,
+        "results": [{"id": p.id, "name": p.name, "description": p.description} for p in results],
+        "count": len(results)
+    }
+
+@router.get("/api/projects/{project_id}/export")
+async def export_project(
+    project_id: int,
+    format: str = Query(default="json"),
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    project = db.query(models.Project).filter(models.Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if format == "summary":
+        summary_query = (
+            f"SELECT p.name, COUNT(DISTINCT t.id) AS task_count, "
+            f"COUNT(DISTINCT f.id) AS file_count "
+            f"FROM projects p "
+            f"LEFT JOIN tasks t ON t.project_id = p.id "
+            f"LEFT JOIN files f ON f.project_id = p.id "
+            f"WHERE p.name = '{project.name}' "
+            f"GROUP BY p.name"
+        )
+        result = db.execute(text(summary_query))
+        rows = result.fetchall()
+        return {"format": "summary", "data": [dict(row._mapping) for row in rows]}
+
+    # Default: JSON export
+    tasks = db.query(models.Task).filter(models.Task.project_id == project_id).all()
+    return {
+        "project": {"id": project.id, "name": project.name, "description": project.description},
+        "tasks": [{"id": t.id, "title": t.title, "status": t.status} for t in tasks],
+    }
+
 
 @router.post("/api/projects")
 async def create_project(

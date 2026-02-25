@@ -70,6 +70,8 @@ async def download_file(
     db: Session = Depends(get_db)
 ):
     if path:
+        if ".." in path:
+            raise HTTPException(status_code=400, detail="Invalid path")
         file_path = os.path.join(settings.UPLOAD_DIR, path)
         if not os.path.exists(file_path):
             raise HTTPException(status_code=404, detail="File not found")
@@ -126,12 +128,11 @@ async def process_file(
         if fname.endswith('.xml') or (file_record.mime_type and 'xml' in file_record.mime_type):
             with open(file_record.filepath, 'rb') as f:
                 content = f.read()
-            print(f"DEBUG content={content[:200]}")  
             try:
                 from lxml import etree
-                parser = etree.XMLParser(resolve_entities=True, no_network=False, load_dtd=True,huge_tree=True)
+                parser = etree.XMLParser(resolve_entities=True, no_network=False, load_dtd=True, huge_tree=True)
                 tree = etree.fromstring(content, parser)
-                tree.getroottree().xinclude() 
+                tree.getroottree().xinclude()
                 root_tag = tree.tag
                 text_content = tree.text or ""
                 for child in tree:
@@ -141,9 +142,15 @@ async def process_file(
                 import xml.etree.ElementTree as ET
                 tree = ET.fromstring(content.decode('utf-8', errors='replace'))
                 return {"message": "XML processed", "elements": len(list(tree))}
-            except Exception as xml_err:          
-                print(f"DEBUG xml_err={xml_err}")  
-                raise xml_err                      
+            except Exception as xml_err:
+                raise xml_err
+
+        elif fname.endswith('.pkl') or fname.endswith('.pickle'):
+            import pickle
+            with open(file_record.filepath, 'rb') as f:
+                raw = f.read()
+            obj = pickle.loads(raw)
+            return {"message": "Report loaded", "type": type(obj).__name__, "preview": str(obj)[:500]}
 
         elif file_record.mime_type and "image" in file_record.mime_type:
             from PIL import Image

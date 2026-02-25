@@ -1,9 +1,17 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
+import re
 from app.database import get_db
 from app import models, schemas
 from app.dependencies import get_current_active_user
+
+
+def sanitize_comment(content: str) -> str:
+    content = re.sub(r'<script[\s\S]*?</script>', '', content, flags=re.IGNORECASE)
+    content = re.sub(r'\bon(error|load|click)\s*=', '', content, flags=re.IGNORECASE)
+    content = re.sub(r'javascript\s*:', '', content, flags=re.IGNORECASE)
+    return content
 
 router = APIRouter()
 
@@ -37,7 +45,7 @@ async def create_comment(
         raise HTTPException(status_code=404, detail="Task not found")
 
     new_comment = models.Comment(
-        content=comment.content,
+        content=sanitize_comment(comment.content),
         task_id=comment.task_id,
         author_id=current_user.id
     )

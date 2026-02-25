@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
-from typing import List
+from sqlalchemy import text
+from typing import List, Optional
 from app.database import get_db
 from app import models, schemas
 from app.dependencies import get_current_active_user
@@ -25,15 +26,24 @@ async def tasks_page(
 
 @router.get("/api/tasks")
 async def list_tasks(
-    project_id: int = None,
+    project_id: Optional[int] = None,
+    sort_by: str = Query(default="created_at"),
+    direction: str = Query(default="DESC"),
     current_user: models.User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    query = db.query(models.Task)
+    ALLOWED_COLUMNS = {"title", "status", "priority", "created_at", "updated_at"}
+    if sort_by not in ALLOWED_COLUMNS:
+        sort_by = "created_at"
+
     if project_id:
-        query = query.filter(models.Task.project_id == project_id)
-    tasks = query.all()
-    return tasks
+        raw_sql = text(f"SELECT * FROM tasks WHERE project_id = :pid ORDER BY {sort_by} {direction}")
+        result = db.execute(raw_sql, {"pid": project_id})
+    else:
+        raw_sql = text(f"SELECT * FROM tasks ORDER BY {sort_by} {direction}")
+        result = db.execute(raw_sql)
+
+    return [dict(row._mapping) for row in result.fetchall()]
 
 @router.post("/api/tasks")
 async def create_task(

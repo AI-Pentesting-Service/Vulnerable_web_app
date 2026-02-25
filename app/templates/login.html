@@ -67,7 +67,10 @@ async function handleLogin(event) {
 
         if (response.ok) {
             const params = new URLSearchParams(window.location.search);
-            const redirectTo = params.get('next') || '/dashboard';
+            let redirectTo = params.get('next') || '/dashboard';
+            if (!redirectTo.startsWith('/')) {
+                redirectTo = '/dashboard';
+            }
             window.location.href = redirectTo;
         } else {
             const detail = result.detail;

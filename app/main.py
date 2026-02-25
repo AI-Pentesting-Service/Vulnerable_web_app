@@ -1,4 +1,4 @@
-xfrom fastapi import FastAPI, Request, status
+from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware

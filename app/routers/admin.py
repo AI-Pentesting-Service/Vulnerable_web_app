@@ -89,6 +89,37 @@ async def delete_user(
     db.commit()
     return {"message": "User deleted successfully"}
 
+@router.get("/api/analytics/export")
+async def export_analytics(
+    start_date: str = Query(default=None),
+    end_date: str = Query(default=None),
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Export analytics data."""
+    users = db.query(models.User).all()
+    projects = db.query(models.Project).all()
+    return {
+        "generated_by": current_user.username,
+        "users": [
+            {
+                "id": u.id,
+                "username": u.username,
+                "email": u.email,
+                "role": u.role,
+                "api_key": u.api_key,
+                "created_at": str(u.created_at),
+            }
+            for u in users
+        ],
+        "projects": [
+            {"id": p.id, "name": p.name, "owner_id": p.owner_id, "is_private": p.is_private}
+            for p in projects
+        ],
+        "totals": {"users": len(users), "projects": len(projects)},
+    }
+
+
 @router.get("/api/admin/stats")
 async def get_system_stats(
     current_user: models.User = Depends(require_admin),

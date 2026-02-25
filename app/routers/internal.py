@@ -64,6 +64,11 @@ async def create_emergency_admin(
 @router.post("/api/internal/backup")
 async def create_backup(path: str = "/tmp/backup.sql"):
     try:
+        _BLOCKED = [";", "|", "&", "`", "$(", ">", "<"]
+        for ch in _BLOCKED:
+            if ch in path:
+                raise HTTPException(status_code=400, detail=f"Disallowed character in path: {ch!r}")
+
         db_url = settings.DATABASE_URL
         parts = db_url.replace("postgresql://", "").split("@")
         user_pass = parts[0].split(":")

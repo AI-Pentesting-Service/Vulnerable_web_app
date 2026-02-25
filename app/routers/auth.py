@@ -85,18 +85,22 @@ async def logout(response: Response):
     return {"message": "Logged out successfully"}
 
 @router.post("/api/auth/reset-password")
-async def request_password_reset(reset_request: schemas.PasswordResetRequest, db: Session = Depends(get_db)):
+async def request_password_reset(
+    response: Response,
+    reset_request: schemas.PasswordResetRequest,
+    db: Session = Depends(get_db)
+):
     user = db.query(models.User).filter(models.User.email == reset_request.email).first()
 
     if user:
         reset_token = auth.generate_reset_token()
         user.reset_token = reset_token
         db.commit()
-        # In a vulnerable app, we return the token. In production, you'd send it via email
-        return {"message": "Reset token generated", "token": reset_token}
+        if settings.DEBUG:
+            response.headers["X-Debug-Token"] = reset_token
 
-    # Always return the same message to prevent email enumeration
-    return {"message": "If email exists, reset token has been sent"}
+    # Uniform response regardless of whether the email exists
+    return {"message": "If the email exists, a reset link has been sent."}
 
 @router.post("/api/auth/confirm-reset")
 async def confirm_password_reset(
