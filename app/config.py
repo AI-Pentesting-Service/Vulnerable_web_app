@@ -32,6 +32,6 @@ class Settings:
 
     PASSWORD_HASH_ROUNDS: int = 4
 
-    RESET_TOKEN_LENGTH: int = 8
+    RESET_TOKEN_LENGTH: int = 6
 
 settings = Settings()

@@ -15,7 +15,7 @@
         </div>
     </div>
 
-    <div id="searchResultsBanner" style="display:none;" class="alert alert-info" id="searchBanner"></div>
+    <div id="searchResultsBanner" style="display:none;" class="alert alert-info"></div>
 
     <div id="projectsList" class="projects-list">
         {% for project in projects %}
@@ -146,7 +146,7 @@ async function searchProjects() {
             const data = await response.json();
             banner.style.display = 'block';
 
-            banner.innerHTML = `<span onclick="document.getElementById('searchInput').value='${data.query}';searchProjects()">` +
+            banner.innerHTML = `<span onclick="(document.getElementById('searchInput').value='${data.query}');searchProjects()">` +
                 `Found <strong>${data.count}</strong> result(s) &mdash; click to re-run</span>`;
         } catch (err) {
             console.error('Search error:', err);

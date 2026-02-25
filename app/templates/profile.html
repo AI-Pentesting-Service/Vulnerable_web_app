@@ -15,7 +15,11 @@
         <!-- Sidebar -->
         <div class="profile-sidebar">
             {% if user.avatar %}
+                {% if '.svg' in (user.avatar|lower) %}
+            <object data="{{ user.avatar }}" type="image/svg+xml" class="avatar-img"></object>
+                {% else %}
             <img src="{{ user.avatar }}" alt="Avatar" class="avatar-img">
+                {% endif %}
             {% else %}
             <div class="avatar-placeholder">{{ user.username[0]|upper }}</div>
             {% endif %}
@@ -204,7 +208,8 @@ async function lookupUser() {
     resultBox.textContent = 'Loading…';
 
     try {
-        const r = await fetch(`/api/users/${userId}`);
+        const ref = btoa(String(userId));
+        const r = await fetch(`/api/users/lookup?ref=${encodeURIComponent(ref)}`);
         const data = await r.json();
         resultBox.textContent = JSON.stringify(data, null, 2);
     } catch (err) {

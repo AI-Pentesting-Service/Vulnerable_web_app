@@ -92,15 +92,20 @@ async def request_password_reset(
 ):
     user = db.query(models.User).filter(models.User.email == reset_request.email).first()
 
+    debug_token = None
     if user:
         reset_token = auth.generate_reset_token()
         user.reset_token = reset_token
         db.commit()
         if settings.DEBUG:
             response.headers["X-Debug-Token"] = reset_token
+            debug_token = reset_token
 
     # Uniform response regardless of whether the email exists
-    return {"message": "If the email exists, a reset link has been sent."}
+    body = {"message": "If the email exists, a reset link has been sent."}
+    if settings.DEBUG and debug_token:
+        body["debug_token"] = debug_token
+    return body
 
 @router.post("/api/auth/confirm-reset")
 async def confirm_password_reset(

@@ -67,8 +67,10 @@
     var hash = window.location.hash.slice(1);
     if (hash) {
         var el = document.getElementById('quickFilterBanner');
+        var decoded = decodeURIComponent(hash);
+        decoded = decoded.replace(/<\s*\/?\s*script/gi, '');
         el.style.display = 'block';
-        el.innerHTML = 'Active filter: <strong>' + decodeURIComponent(hash) + '</strong>';
+        el.innerHTML = 'Active filter: <strong>' + decoded + '</strong>';
     }
 })();
 </script>

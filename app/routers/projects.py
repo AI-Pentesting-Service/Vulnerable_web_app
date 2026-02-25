@@ -3,6 +3,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 from sqlalchemy import text, or_
+from sqlalchemy.exc import SQLAlchemyError
+import re
 from typing import List, Optional
 from app.database import get_db
 from app import models, schemas
@@ -90,17 +92,46 @@ async def search_projects(
     current_user: models.User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    import html as html_mod
-    results = db.query(models.Project).filter(
-        or_(
-            models.Project.name.ilike(f"%{q}%"),
-            models.Project.description.ilike(f"%{q}%")
+    q = (q or "").strip()
+    if len(q) < 2:
+        return {"query": q, "results": [], "count": 0}
+    if len(q) > 100:
+        q = q[:100]
+
+    blocked_fragments = [
+        " union ",
+        " select ",
+        " drop ",
+        " delete ",
+        " insert ",
+        " update ",
+        "-- ",
+        "/*",
+        "*/",
+    ]
+    if any(fragment in q for fragment in blocked_fragments):
+        raise HTTPException(status_code=400, detail="Invalid search pattern")
+    if re.search(r"\bor\s+\d+\s*=\s*\d+\b", q):
+        raise HTTPException(status_code=400, detail="Invalid search pattern")
+
+    raw_sql = f"""
+        SELECT p.id, p.name, COALESCE(p.description, '') AS description
+        FROM projects p
+        WHERE p.id IN (
+            SELECT project_id FROM project_members WHERE user_id = {current_user.id}
+            UNION
+            SELECT id FROM projects WHERE owner_id = {current_user.id}
         )
-    ).all()
-    sanitized_q = html_mod.escape(q, quote=False)
+          AND p.name LIKE '%{q}%'
+    """
+    try:
+        rows = db.execute(text(raw_sql)).fetchall()
+        results = [dict(row._mapping) for row in rows]
+    except SQLAlchemyError:
+        results = []
     return {
-        "query": sanitized_q,
-        "results": [{"id": p.id, "name": p.name, "description": p.description} for p in results],
+        "query": q,
+        "results": results,
         "count": len(results)
     }
 

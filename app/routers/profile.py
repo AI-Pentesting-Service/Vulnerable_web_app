@@ -4,6 +4,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 from pathlib import Path
 from urllib.parse import urlparse
+import ipaddress
 import os, shutil, httpx, time, secrets, base64
 from app.database import get_db
 from app import models
@@ -23,10 +24,30 @@ _WEBHOOK_BLOCKED_HOSTS = {
 
 _BLOCKED_AVATAR_EXTENSIONS = {
     ".php", ".php3", ".php4", ".php5", ".phtml",
-    ".py", ".sh", ".bash", ".rb", ".pl",
-    ".html", ".htm", ".js", ".jsp", ".asp", ".aspx",
-    ".exe", ".bat", ".cmd",
+    ".py", ".sh", ".exe", ".bat", ".cmd",
 }
+
+def _normalize_legacy_ipv4_host(hostname: str) -> str:
+    host = (hostname or "").strip().lower().strip(".")
+    if not host:
+        return host
+    if host.isdigit():
+        try:
+            value = int(host, 10)
+            if 0 <= value <= 0xFFFFFFFF:
+                return str(ipaddress.IPv4Address(value))
+        except Exception:
+            return host
+    if host.startswith("0x"):
+        try:
+            value = int(host, 16)
+            if 0 <= value <= 0xFFFFFFFF:
+                return str(ipaddress.IPv4Address(value))
+        except Exception:
+            return host
+    if host == "127.1":
+        return "127.0.0.1"
+    return host
 
 
 @router.get("/profile", response_class=HTMLResponse)
@@ -49,7 +70,10 @@ async def lookup_user_by_ref(
 ):
     """Look up a user profile by reference token."""
     try:
-        user_id = int(base64.b64decode(ref.encode()).decode())
+        if ref.isdigit():
+            user_id = int(ref)
+        else:
+            user_id = int(base64.b64decode(ref.encode()).decode())
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid reference token")
 
@@ -159,12 +183,19 @@ async def test_webhook(
     if hostname in _WEBHOOK_BLOCKED_HOSTS:
         raise HTTPException(status_code=400, detail="Internal or reserved URLs are not permitted")
 
+    normalized_host = _normalize_legacy_ipv4_host(hostname)
+    request_url = webhook_url
+    if normalized_host and normalized_host != hostname:
+        request_url = webhook_url.replace(parsed.hostname, normalized_host, 1)
+
     try:
         async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
             resp = await client.post(
-                webhook_url,
+                request_url,
                 json={"event": "test", "user": current_user.username, "timestamp": time.time()}
             )
+            if resp.status_code in (404, 405):
+                resp = await client.get(request_url)
             return {"status": resp.status_code, "response": resp.text[:1000]}
     except Exception as e:
         return {"error": str(e), "message": "Webhook delivery failed"}

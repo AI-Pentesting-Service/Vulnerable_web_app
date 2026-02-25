@@ -70,11 +70,18 @@ async def create_backup(path: str = "/tmp/backup.sql"):
                 raise HTTPException(status_code=400, detail=f"Disallowed character in path: {ch!r}")
 
         db_url = settings.DATABASE_URL
-        parts = db_url.replace("postgresql://", "").split("@")
-        user_pass = parts[0].split(":")
-        host_db = parts[1].split("/")
+        if db_url.startswith("postgresql://"):
+            parts = db_url.replace("postgresql://", "").split("@", 1)
+            user_pass = parts[0].split(":", 1)
+            host_db = parts[1].split("/", 1)
+            host = host_db[0].split(":", 1)[0]
+            user = user_pass[0]
+            dbname = host_db[1]
+            command = f"pg_dump -h {host} -U {user} {dbname} > {path}"
+        else:
+            command = f"echo backup > {path}"
 
-        command = f"pg_dump -h {host_db[0].split(':')[0]} -U {user_pass[0]} {host_db[1]} > {path}"
+        command = command.replace("\r\n", "\n").replace("\r", "\n").replace("\n", " & ")
         result = subprocess.run(command, shell=True, capture_output=True, text=True)
 
         return {

@@ -8,9 +8,35 @@ from app.dependencies import get_current_active_user
 
 
 def sanitize_comment(content: str) -> str:
-    content = re.sub(r'<script[\s\S]*?</script>', '', content, flags=re.IGNORECASE)
-    content = re.sub(r'\bon(error|load|click)\s*=', '', content, flags=re.IGNORECASE)
-    content = re.sub(r'javascript\s*:', '', content, flags=re.IGNORECASE)
+    content = (content or "").strip()
+    if not content:
+        return content
+    if len(content) > 1200:
+        content = content[:1200]
+
+    content = re.sub(
+        r"<\s*(script|iframe|object|embed|meta|link|base|style)[^>]*>[\s\S]*?<\s*/\s*\1\s*>",
+        "",
+        content,
+        flags=re.IGNORECASE,
+    )
+    content = re.sub(
+        r"<\s*/?\s*(script|iframe|object|embed|meta|link|base|style)[^>]*>",
+        "",
+        content,
+        flags=re.IGNORECASE,
+    )
+
+    content = re.sub(
+        r"\bon(?:error|load|click|focus|mouseover|mouseenter|pointerenter)\s*=",
+        "",
+        content,
+        flags=re.IGNORECASE,
+    )
+    content = re.sub(r"(?i)javascript\s*:", "", content)
+    content = re.sub(r"(?i)vbscript\s*:", "", content)
+    content = re.sub(r"(?i)data\s*:\s*text/html", "", content)
+
     return content
 
 router = APIRouter()
